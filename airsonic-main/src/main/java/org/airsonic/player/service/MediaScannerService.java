@@ -207,6 +207,16 @@ public class MediaScannerService {
      * The scanning is done asynchronously, i.e., this method returns immediately.
      */
     public synchronized void scanLibrary() {
+        scanLibrary(null);
+    }
+
+    /**
+     * Scans specific media folders by their IDs.
+     * The scanning is done asynchronously, i.e., this method returns immediately.
+     *
+     * @param folderIds List of music folder IDs to scan, or null/empty to scan all folders.
+     */
+    public synchronized void scanLibrary(List<Integer> folderIds) {
         if (isScanning()) {
             return;
         }
@@ -216,11 +226,24 @@ public class MediaScannerService {
         ForkJoinPool pool = new ForkJoinPool(scannerParallelism, mediaScannerThreadFactory, null, true);
 
         boolean isFullScan = settingsService.getFullScan();
-        long timeoutSeconds = isFullScan ? scanConfig.getFullTimeout() : scanConfig.getTimeout();
+        long timeoutSeconds = getEffectiveTimeout(isFullScan);
         MediaLibraryStatistics statistics = new MediaLibraryStatistics();
-        LOG.info("Starting media library scan with timeout {} seconds.", timeoutSeconds);
+
+        List<MusicFolder> foldersToScan = mediaFolderService.getAllMusicFolders(false, true).stream()
+                .filter(f -> folderIds == null || folderIds.isEmpty() || folderIds.contains(f.getId()))
+                .toList();
+
+        if (foldersToScan.isEmpty()) {
+            LOG.info("No music folders to scan.");
+            setScanning(false);
+            setMediaScanning(false);
+            pool.shutdown();
+            return;
+        }
+
+        LOG.info("Starting media library scan for {} folder(s) with timeout {} seconds.", foldersToScan.size(), timeoutSeconds);
         CompletableFuture.runAsync(() -> {
-            doScanLibrary(pool, statistics);
+            doScanLibrary(pool, statistics, foldersToScan);
         }, pool)
                 .orTimeout(timeoutSeconds, TimeUnit.SECONDS)
                 .whenComplete((r,e) -> {
@@ -242,7 +265,19 @@ public class MediaScannerService {
                 });
     }
 
-    private void doScanLibrary(ForkJoinPool pool, MediaLibraryStatistics statistics) {
+    /**
+     * Gets the effective timeout value, checking SettingsService first (user-overridable at runtime),
+     * then falling back to AirsonicScanConfig (environment/startup config).
+     */
+    private long getEffectiveTimeout(boolean isFullScan) {
+        int settingsTimeout = isFullScan ? settingsService.getScanFullTimeout() : settingsService.getScanTimeout();
+        if (settingsTimeout > 0) {
+            return settingsTimeout;
+        }
+        return isFullScan ? scanConfig.getFullTimeout() : scanConfig.getTimeout();
+    }
+
+    private void doScanLibrary(ForkJoinPool pool, MediaLibraryStatistics statistics, List<MusicFolder> foldersToScan) {
         LOG.info("Starting to scan media library.");
         LOG.debug("New last scan date is {}", statistics.getScanDate());
 
@@ -263,7 +298,7 @@ public class MediaScannerService {
 
             // Recurse through all files on disk.
             pool.submit(() -> {
-                mediaFolderService.getAllMusicFolders()
+                foldersToScan
                         .parallelStream()
                         .forEach(musicFolder -> scanFile(pool, null, null, mediaFileService.getMediaFile(Paths.get(""), musicFolder, false),
                                 musicFolder, statistics, albumCount, artists, albums, albumsInDb, genres));

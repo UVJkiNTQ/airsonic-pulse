@@ -88,6 +88,8 @@ public class SettingsService {
     private static final String KEY_FAST_CACHE_ENABLED = "FastCacheEnabled";
     private static final String KEY_FULL_SCAN = "FullScan";
     private static final String KEY_CLEAR_FULL_SCAN_SETTING_AFTER_SCAN = "ClearFullScanSettingAfterScan";
+    private static final String KEY_SCAN_TIMEOUT = "ScanTimeout";
+    private static final String KEY_SCAN_FULL_TIMEOUT = "ScanFullTimeout";
     private static final String KEY_TRANSCODE_ESTIMATE_TIME_PADDING = "TranscodeEstimateTimePadding";
     private static final String KEY_TRANSCODE_ESTIMATE_BYTE_PADDING = "TranscodeEstimateBytePadding";
     private static final String KEY_DB_BACKUP_INTERVAL = "DbBackupUpdateInterval";
@@ -874,6 +876,22 @@ public class SettingsService {
 
     public void setClearFullScanSettingAfterScan(Boolean clear) {
         setBoolean(KEY_CLEAR_FULL_SCAN_SETTING_AFTER_SCAN, clear);
+    }
+
+    public int getScanTimeout() {
+        return getInt(KEY_SCAN_TIMEOUT, 0);
+    }
+
+    public void setScanTimeout(Integer scanTimeout) {
+        setInt(KEY_SCAN_TIMEOUT, scanTimeout);
+    }
+
+    public int getScanFullTimeout() {
+        return getInt(KEY_SCAN_FULL_TIMEOUT, 0);
+    }
+
+    public void setScanFullTimeout(Integer scanFullTimeout) {
+        setInt(KEY_SCAN_FULL_TIMEOUT, scanFullTimeout);
     }
 
     public long getTranscodeEstimateTimePadding() {

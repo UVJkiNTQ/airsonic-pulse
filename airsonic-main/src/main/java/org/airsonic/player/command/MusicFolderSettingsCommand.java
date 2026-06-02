@@ -56,6 +56,8 @@ public class MusicFolderSettingsCommand {
     private boolean hideVirtualTracks;
     private Boolean fullScan;
     private Boolean clearFullScanSettingAfterScan;
+    private Integer scanTimeout;
+    private Integer scanFullTimeout;
 
     public String getInterval() {
         return interval;
@@ -177,6 +179,22 @@ public class MusicFolderSettingsCommand {
         this.clearFullScanSettingAfterScan = clearFullScanSettingAfterScan;
     }
 
+    public Integer getScanTimeout() {
+        return scanTimeout;
+    }
+
+    public void setScanTimeout(Integer scanTimeout) {
+        this.scanTimeout = scanTimeout;
+    }
+
+    public Integer getScanFullTimeout() {
+        return scanFullTimeout;
+    }
+
+    public void setScanFullTimeout(Integer scanFullTimeout) {
+        this.scanFullTimeout = scanFullTimeout;
+    }
+
     public String getUploadsFolder() {
         return uploadsFolder;
     }
@@ -196,6 +214,7 @@ public class MusicFolderSettingsCommand {
         private boolean existing;
         private boolean overlap;
         private String overlapStatus;
+        private boolean scan;
 
         public MusicFolderInfo(MusicFolder musicFolder, boolean overlap, String overlapStatus) {
             id = musicFolder.getId();
@@ -258,6 +277,14 @@ public class MusicFolderSettingsCommand {
 
         public void setDelete(boolean delete) {
             this.delete = delete;
+        }
+
+        public boolean getScan() {
+            return scan;
+        }
+
+        public void setScan(boolean scan) {
+            this.scan = scan;
         }
 
         public boolean getOverlap() {

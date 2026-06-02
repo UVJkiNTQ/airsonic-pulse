@@ -36,6 +36,21 @@
             $('.podcast-enable-radio[value="false"]').prop("checked", true);
             $(el).prop("checked", true);
         }
+
+        function scanNow() {
+            var folderIds = [];
+            $('input[name$=".scan"]:checked').each(function() {
+                var match = $(this).attr('name').match(/musicFolders\[(\d+)\]\.scan/);
+                if (match) {
+                    folderIds.push($('input[name="musicFolders[' + match[1] + '].id"]').val());
+                }
+            });
+            var url = 'musicFolderSettings?scanNow';
+            for (var i = 0; i < folderIds.length; i++) {
+                url += '&scanFolderId=' + folderIds[i];
+            }
+            window.location.href = url;
+        }
     </script>
 </head>
 <body class="mainframe bgcolor1" onload="init()">
@@ -54,9 +69,11 @@
         <th th:text="#{musicfoldersettings.enabled}"></th>
         <th th:text="#{common.delete}"></th>
         <th></th>
+        <th th:text="#{musicfoldersettings.scancolumn}"></th>
     </tr>
 
     <tr th:each="folder, loopStatus: *{musicFolders}">
+        <input type="hidden" th:field="*{musicFolders[__${loopStatus.index}__].id}"/>
         <td><input th:field="*{musicFolders[__${loopStatus.index}__].name}" style="width:90%"/></td>
         <td><input th:field="*{musicFolders[__${loopStatus.index}__].path}" style="width:90%"/></td>
         <td align="center"><span th:text="${folder.type}"></span></td>
@@ -74,14 +91,15 @@
           <span th:if="${!folder.existing}" class="warning" th:text="#{musicfoldersettings.notfound}"></span>
           <span th:if="${folder.overlap}" th:text="#{musicfoldersettings.overlap(${folder.overlapStatus})}"></span>
         </td>
+        <td align="center"><input type="checkbox" th:field="*{musicFolders[__${loopStatus.index}__].scan}" class="checkbox"/></td>
     </tr>
 
     <tr>
-        <td colspan="6" align="left" style="padding-top:1em"><span class="detail" style="white-space: normal" th:text="#{musicfoldersettings.podcastfoldernote}"></span></td>
+        <td colspan="7" align="left" style="padding-top:1em"><span class="detail" style="white-space: normal" th:text="#{musicfoldersettings.podcastfoldernote}"></span></td>
     </tr>
 
     <tr>
-        <th colspan="6" align="left" style="padding-top:1em" th:text="#{musicfoldersettings.deleted}"></th>
+        <th colspan="7" align="left" style="padding-top:1em" th:text="#{musicfoldersettings.deleted}"></th>
     </tr>
 
     <tr th:each="folder, loopStatus: *{deletedMusicFolders}">
@@ -94,14 +112,15 @@
           <span th:if="${!folder.existing}" class="warning" th:text="#{musicfoldersettings.notfound}"></span>
           <span th:if="${folder.overlap}" th:text="#{musicfoldersettings.overlap(${folder.overlapStatus})}"></span>
         </td>
+        <td></td>
     </tr>
 
     <tr>
-        <td colspan="6" align="left" style="padding-top:1em"><span class="detail" th:text="#{musicfoldersettings.deletenote}"></span></td>
+        <td colspan="7" align="left" style="padding-top:1em"><span class="detail" th:text="#{musicfoldersettings.deletenote}"></span></td>
     </tr>
 
     <tr th:if="${!#lists.isEmpty(command.musicFolders)}">
-        <th colspan="6" align="left" style="padding-top:1em" th:text="#{musicfoldersettings.add}"></th>
+        <th colspan="7" align="left" style="padding-top:1em" th:text="#{musicfoldersettings.add}"></th>
     </tr>
 
     <tr>
@@ -113,6 +132,7 @@
           </select>
         </td>
         <td align="center"><input type="checkbox" th:field="*{newMusicFolder.enabled}" class="checkbox"/></td>
+        <td></td>
         <td></td>
         <td></td>
     </tr>
@@ -161,6 +181,18 @@
         <th:block th:replace="~{helpToolTip((topic=clearfullscan))}" />
     </div>
 
+    <div>
+        <span th:text="#{musicfoldersettings.scantimeout}"></span>
+        <input type="number" th:field="*{scanTimeout}" size="10" min="0" style="width:6em"/>
+        <span class="detail" th:text="#{musicfoldersettings.scantimeout.description}"></span>
+    </div>
+
+    <div>
+        <span th:text="#{musicfoldersettings.fullscantimeout}"></span>
+        <input type="number" th:field="*{scanFullTimeout}" size="10" min="0" style="width:6em"/>
+        <span class="detail" th:text="#{musicfoldersettings.fullscantimeout.description}"></span>
+    </div>
+
     <div style="padding-top: 0.5em;padding-bottom: 0.3em">
         <span style="white-space: nowrap">
             <span th:text="#{musicfoldersettings.scan}"></span>
@@ -180,7 +212,7 @@
 
     <table>
         <tr>
-            <td><div class="forward"><a href="musicFolderSettings?scanNow" th:text="#{musicfoldersettings.scannow}"></a></div></td>
+            <td><div class="forward"><a href="javascript:scanNow()" th:text="#{musicfoldersettings.scannow}"></a></div></td>
             <td><th:block th:replace="~{helpToolTip((topic=scanMediaFolders))}" /></td>
         </tr>
     </table>
@@ -210,6 +242,7 @@
 
     <p >
         <input type="submit" th:value="#{common.save}" style="margin-right:0.3em">
+        <span class="detail" th:text="#{musicfoldersettings.savescanhint}" style="margin-left:0.5em"></span>
         <a th:href='nowPlaying'><input type="button" th:value="#{common.cancel}"></a>
     </p>
 

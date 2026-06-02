@@ -761,6 +761,174 @@ public class MediaScannerServiceTestCase {
     }
 
 
+    @Test
+    public void testMusicExtendedCueWithLongTitleAndReplayGain() {
+        LOG.info("start testMusicExtendedCueWithLongTitleAndReplayGain");
+
+        // Add the "extendedCue1" folder to the database
+        Path musicFolderFile = MusicFolderTestData.resolveMusicExtendedCue1FolderPath();
+        MusicFolder musicFolder = new MusicFolder(musicFolderFile, "extendedCue1", Type.MEDIA, true, Instant.now().truncatedTo(ChronoUnit.MICROS));
+        testFolders.add(musicFolder);
+        musicFolderRepository.saveAll(testFolders);
+        TestCaseUtils.execScan(mediaScannerService);
+
+        // Retrieve the folder from the database
+        musicFolder = musicFolderRepository.findById(musicFolder.getId()).get();
+        List<MusicFolder> folders = new ArrayList<>();
+        folders.add(musicFolder);
+
+        // Test that the artist is correctly imported
+        List<Artist> allArtists = artistService.getAlphabeticalArtists(folders);
+        assertEquals(1, allArtists.size());
+        Artist artist = allArtists.get(0);
+        assertEquals("TestExtendedArtist", artist.getName());
+        assertEquals(1, artist.getAlbumCount());
+
+        // Test that the album is correctly imported
+        List<Album> allAlbums = albumService.getAlphabeticalAlbums(true, true, folders);
+        assertEquals(1, allAlbums.size());
+        Album album = allAlbums.get(0);
+        assertTrue(album.getName().startsWith("This is a very long album title"));
+        assertTrue(album.getName().length() > 80, "Album title should exceed 80 characters");
+        assertEquals("TestExtendedArtist", album.getArtist());
+        assertEquals(2, album.getSongCount());
+
+        // Test that the music files are correctly imported
+        List<MediaFile> albumFiles = mediaFileRepository.findByFolderAndParentPath(album.getFolder(), album.getPath(), Sort.by("startPosition"));
+        assertEquals(3, albumFiles.size());
+
+        // Base file
+        MediaFile baseFile = albumFiles.get(0);
+        assertEquals("airsonic-test", baseFile.getTitle());
+        assertEquals("wav", baseFile.getFormat());
+        assertEquals(album.getPath(), baseFile.getParentPath());
+        assertTrue(baseFile.getIndexPath().contains("airsonic-test.cue"));
+        assertEquals(-1.0d, baseFile.getStartPosition(), 0.0d);
+
+        // Track 1
+        MediaFile track1 = albumFiles.get(1);
+        assertEquals("Track One", track1.getTitle());
+        assertEquals("wav", track1.getFormat());
+        assertEquals("TestExtendedArtist", track1.getAlbumArtist());
+        assertEquals("TestExtendedArtist", track1.getArtist());
+        assertEquals(1L, (long) track1.getTrackNumber());
+        assertEquals(0.0d, track1.getStartPosition(), 0.0d);
+
+        // Track 2
+        MediaFile track2 = albumFiles.get(2);
+        assertEquals("Track Two", track2.getTitle());
+        assertEquals("TestExtendedArtist", track2.getArtist());
+        assertEquals(2L, (long) track2.getTrackNumber());
+        assertTrue(track2.getStartPosition() > 0);
+    }
+
+    @Test
+    public void testMusicExtendedCueWithNonStandardCatalogAndIsrc() {
+        LOG.info("start testMusicExtendedCueWithNonStandardCatalogAndIsrc");
+
+        // Add the "extendedCue2" folder to the database
+        Path musicFolderFile = MusicFolderTestData.resolveMusicExtendedCue2FolderPath();
+        MusicFolder musicFolder = new MusicFolder(musicFolderFile, "extendedCue2", Type.MEDIA, true, Instant.now().truncatedTo(ChronoUnit.MICROS));
+        testFolders.add(musicFolder);
+        musicFolderRepository.saveAll(testFolders);
+        TestCaseUtils.execScan(mediaScannerService);
+
+        // Retrieve the folder from the database
+        musicFolder = musicFolderRepository.findById(musicFolder.getId()).get();
+        List<MusicFolder> folders = new ArrayList<>();
+        folders.add(musicFolder);
+
+        // Test that the artist is correctly imported
+        List<Artist> allArtists = artistService.getAlphabeticalArtists(folders);
+        assertEquals(1, allArtists.size());
+        Artist artist = allArtists.get(0);
+        assertEquals("TestExtendedArtist2", artist.getName());
+        assertEquals(1, artist.getAlbumCount());
+
+        // Test that the album is correctly imported
+        List<Album> allAlbums = albumService.getAlphabeticalAlbums(true, true, folders);
+        assertEquals(1, allAlbums.size());
+        Album album = allAlbums.get(0);
+        assertEquals("Catalog Album", album.getName());
+        assertEquals("TestExtendedArtist2", album.getArtist());
+        assertEquals(2, album.getSongCount());
+
+        // Test that the music files are correctly imported
+        List<MediaFile> albumFiles = mediaFileRepository.findByFolderAndParentPath(album.getFolder(), album.getPath(), Sort.by("startPosition"));
+        assertEquals(3, albumFiles.size());
+
+        // Base file
+        MediaFile baseFile = albumFiles.get(0);
+        assertTrue(baseFile.getIndexPath().contains("airsonic-test.cue"));
+        assertEquals(-1.0d, baseFile.getStartPosition(), 0.0d);
+
+        // Track 1
+        MediaFile track1 = albumFiles.get(1);
+        assertEquals("Track One", track1.getTitle());
+        assertEquals("TestExtendedArtist2", track1.getAlbumArtist());
+        assertEquals(1L, (long) track1.getTrackNumber());
+        assertEquals(0.0d, track1.getStartPosition(), 0.0d);
+
+        // Track 2
+        MediaFile track2 = albumFiles.get(2);
+        assertEquals("Track Two", track2.getTitle());
+        assertEquals(2L, (long) track2.getTrackNumber());
+        assertTrue(track2.getStartPosition() > 0);
+    }
+
+    @Test
+    public void testMusicExtendedCueWithTrailingEmptyLines() {
+        LOG.info("start testMusicExtendedCueWithTrailingEmptyLines");
+
+        // Add the "extendedCue3" folder to the database
+        Path musicFolderFile = MusicFolderTestData.resolveMusicExtendedCue3FolderPath();
+        MusicFolder musicFolder = new MusicFolder(musicFolderFile, "extendedCue3", Type.MEDIA, true, Instant.now().truncatedTo(ChronoUnit.MICROS));
+        testFolders.add(musicFolder);
+        musicFolderRepository.saveAll(testFolders);
+        TestCaseUtils.execScan(mediaScannerService);
+
+        // Retrieve the folder from the database
+        musicFolder = musicFolderRepository.findById(musicFolder.getId()).get();
+        List<MusicFolder> folders = new ArrayList<>();
+        folders.add(musicFolder);
+
+        // Test that the artist is correctly imported
+        List<Artist> allArtists = artistService.getAlphabeticalArtists(folders);
+        assertEquals(1, allArtists.size());
+        Artist artist = allArtists.get(0);
+        assertEquals("TestExtendedArtist3", artist.getName());
+        assertEquals(1, artist.getAlbumCount());
+
+        // Test that the album is correctly imported
+        List<Album> allAlbums = albumService.getAlphabeticalAlbums(true, true, folders);
+        assertEquals(1, allAlbums.size());
+        Album album = allAlbums.get(0);
+        assertEquals("Empty Lines Album", album.getName());
+        assertEquals("TestExtendedArtist3", album.getArtist());
+        assertEquals(2, album.getSongCount());
+
+        // Test that the music files are correctly imported
+        List<MediaFile> albumFiles = mediaFileRepository.findByFolderAndParentPath(album.getFolder(), album.getPath(), Sort.by("startPosition"));
+        assertEquals(3, albumFiles.size());
+
+        // Base file
+        MediaFile baseFile = albumFiles.get(0);
+        assertTrue(baseFile.getIndexPath().contains("airsonic-test.cue"));
+        assertEquals(-1.0d, baseFile.getStartPosition(), 0.0d);
+
+        // Track 1
+        MediaFile track1 = albumFiles.get(1);
+        assertEquals("Track One", track1.getTitle());
+        assertEquals("TestExtendedArtist3", track1.getAlbumArtist());
+        assertEquals(1L, (long) track1.getTrackNumber());
+
+        // Track 2
+        MediaFile track2 = albumFiles.get(2);
+        assertEquals("Track Two", track2.getTitle());
+        assertEquals(2L, (long) track2.getTrackNumber());
+    }
+
+
 
 
     @Test

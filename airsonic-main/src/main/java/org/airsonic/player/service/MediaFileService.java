@@ -39,6 +39,7 @@ import org.airsonic.player.repository.MusicFileInfoRepository;
 import org.airsonic.player.repository.OffsetBasedPageRequest;
 import org.airsonic.player.repository.StarredMediaFileRepository;
 import org.airsonic.player.service.cache.MediaFileCache;
+import org.airsonic.player.service.cue.CueParser;
 import org.airsonic.player.service.metadata.Chapter;
 import org.airsonic.player.service.metadata.FFmpegParser;
 import org.airsonic.player.service.metadata.JaudiotaggerParser;
@@ -49,7 +50,6 @@ import org.airsonic.player.util.FileUtil;
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
-import org.digitalmediaserver.cuelib.CueParser;
 import org.digitalmediaserver.cuelib.CueSheet;
 import org.digitalmediaserver.cuelib.Position;
 import org.digitalmediaserver.cuelib.TrackData;
@@ -1383,14 +1383,11 @@ public class MediaFileService {
                     } catch (IOException e) {
                         LOG.warn("Defaulting to UTF-8 for cuesheet {}", cueFile);
                     }
-                    if (cueSheet != null) {
-                        if (cueSheet.getMessages().stream().filter(m -> m.toString().toLowerCase().contains("warning"))
-                                .map(m -> {
-                                    LOG.warn("Parsing {} at line {} : {}", cueFile, m.getLineNumber(), m.getMessage());
-                                    return m;
-                                }).findFirst().isPresent()) {
-                            cueSheet = null;
-                        }
+                    // Lenient parser: warnings are logged at debug level, no need to nullify cueSheet
+                    if (cueSheet != null && !cueSheet.getMessages().isEmpty()) {
+                        cueSheet.getMessages().forEach(m -> {
+                            LOG.debug("CUE parser message for {} at line {}: {}", cueFile, m.getLineNumber(), m.getMessage());
+                        });
                     }
                     break;
                 case "flac":

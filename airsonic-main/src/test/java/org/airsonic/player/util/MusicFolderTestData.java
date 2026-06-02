@@ -83,6 +83,18 @@ public class MusicFolderTestData {
         return resolveBaseMediaPath().resolve("lyrics");
     }
 
+    public static Path resolveMusicExtendedCue1FolderPath() {
+        return resolveBaseMediaPath().resolve("extendedCue1");
+    }
+
+    public static Path resolveMusicExtendedCue2FolderPath() {
+        return resolveBaseMediaPath().resolve("extendedCue2");
+    }
+
+    public static Path resolveMusicExtendedCue3FolderPath() {
+        return resolveBaseMediaPath().resolve("extendedCue3");
+    }
+
 
     public static List<MusicFolder> getTestMusicFolders() {
         List<MusicFolder> liste = new ArrayList<>();

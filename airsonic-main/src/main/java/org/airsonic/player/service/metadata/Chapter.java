@@ -9,7 +9,7 @@ import java.util.Optional;
 
 public class Chapter {
 
-    private Integer id;
+    private Long id;
 
     @JsonProperty("time_base")
     private String timeBase;
@@ -31,7 +31,7 @@ public class Chapter {
     public Chapter() {
     }
 
-    public Chapter(Integer id, String timeBase, Long start, String startTime, Long end, String endTime, String title,
+    public Chapter(Long id, String timeBase, Long start, String startTime, Long end, String endTime, String title,
             Map<String, String> tags) {
         this.id = id;
         this.timeBase = StringUtils.trimToNull(timeBase);
@@ -43,11 +43,11 @@ public class Chapter {
         this.tags = tags == null ? new HashMap<>() : tags;
     }
 
-    public Integer getId() {
+    public Long getId() {
         return id;
     }
 
-    public void setId(Integer id) {
+    public void setId(Long id) {
         this.id = id;
     }
 

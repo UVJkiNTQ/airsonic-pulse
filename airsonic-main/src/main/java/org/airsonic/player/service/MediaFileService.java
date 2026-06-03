@@ -1156,7 +1156,7 @@ public class MediaFileService {
                     track.setPresent(true);
                     track.setStartPosition(chapter.getStartTimeSeconds());
                     track.setDuration(duration);
-                    track.setTrackNumber(chapter.getId());
+                    track.setTrackNumber(chapter.getId() != null ? chapter.getId().intValue() : null);
                     track.setDiscNumber(base.getDiscNumber());
                     track.setGenre(base.getGenre());
                     track.setYear(base.getYear());
@@ -1224,6 +1224,12 @@ public class MediaFileService {
 
             if (trackSize > 0) {
                 TrackData lastTrackData = cueSheet.getAllTrackData().get(trackSize - 1);
+                if (lastTrackData.getIndices().isEmpty()) {
+                    LOG.warn("Last track in CUE sheet {} has no INDEX, skipping", base.getFullIndexPath());
+                    base.setIndexPath(null);
+                    updateMediaFile(base);
+                    return children;
+                }
                 double lastTrackStart = lastTrackData.getIndices().get(0).getPosition().getMinutes() * 60 + lastTrackData.getIndices().get(0).getPosition().getSeconds() + (lastTrackData.getIndices().get(0).getPosition().getFrames() / 75);
                 if (lastTrackStart >= wholeFileLength) {
                     base.setIndexPath(null);
@@ -1234,6 +1240,10 @@ public class MediaFileService {
 
             for (int i = 0; i < trackSize; i++) {
                 TrackData trackData = cueSheet.getAllTrackData().get(i);
+                if (trackData.getIndices().isEmpty()) {
+                    LOG.warn("Track {} in CUE sheet {} has no INDEX, skipping", trackData.getNumber(), base.getFullIndexPath());
+                    continue;
+                }
                 Position currentPosition = trackData.getIndices().get(0).getPosition();
                 // convert CUE timestamp (minutes:seconds:frames, 75 frames/second) to fractional seconds
                 double currentStart = currentPosition.getMinutes() * 60 + currentPosition.getSeconds() + (currentPosition.getFrames() / 75);

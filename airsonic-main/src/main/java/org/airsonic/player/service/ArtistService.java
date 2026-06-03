@@ -222,15 +222,41 @@ public class ArtistService {
     }
 
     /**
-     * Save artist
+     * Save artist.
+     * <p>
+     * If the artist has no ID (new entity), first checks whether an artist with
+     * the same name already exists to avoid unique constraint violations
+     * (e.g., from Unicode variation in the name string).
      *
      * @param artist artist to save
      * @return saved artist
      */
     @Transactional
     public Artist save(Artist artist) {
-        artistRepository.save(artist);
-        return artist;
+        if (artist.getId() == null && artist.getName() != null) {
+            Artist existing = artistRepository.findByName(artist.getName()).orElse(null);
+            if (existing != null) {
+                if (artist.getSortName() != null) {
+                    existing.setSortName(artist.getSortName());
+                }
+                if (artist.getMusicBrainzArtistId() != null) {
+                    existing.setMusicBrainzArtistId(artist.getMusicBrainzArtistId());
+                }
+                if (artist.getLastScanned() != null) {
+                    existing.setLastScanned(artist.getLastScanned());
+                }
+                if (artist.getFolder() != null) {
+                    existing.setFolder(artist.getFolder());
+                }
+                if (artist.getArt() != null) {
+                    existing.setArt(artist.getArt());
+                }
+                existing.setPresent(artist.isPresent());
+                existing.setAlbumCount(artist.getAlbumCount());
+                return artistRepository.save(existing);
+            }
+        }
+        return artistRepository.save(artist);
     }
 
     /**

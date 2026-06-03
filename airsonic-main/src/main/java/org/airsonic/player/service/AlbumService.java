@@ -369,14 +369,70 @@ public class AlbumService {
     }
 
     /**
-     * Save album to database
+     * Save album to database.
+     * <p>
+     * If the album has no ID (new entity), first checks whether an album with the
+     * same artist and name already exists to avoid unique constraint violations
+     * (e.g., from multi-disc sets or Unicode variation in artist/name strings).
      *
      * @param album album to save
+     * @return saved album
      */
     @Transactional
     public Album save(Album album) {
-        albumRepository.save(album);
-        return album;
+        if (album.getId() == null && album.getArtist() != null && album.getName() != null) {
+            Album existing = albumRepository.findByArtistAndName(album.getArtist(), album.getName()).orElse(null);
+            if (existing != null) {
+                // Merge fields from the new album into the existing one
+                if (album.getPath() != null) {
+                    existing.setPath(album.getPath());
+                }
+                if (album.getSortName() != null) {
+                    existing.setSortName(album.getSortName());
+                }
+                if (album.getYear() != null) {
+                    existing.setYear(album.getYear());
+                }
+                if (album.getReleaseDate() != null) {
+                    existing.setReleaseDate(album.getReleaseDate());
+                }
+                if (album.getOriginalReleaseDate() != null) {
+                    existing.setOriginalReleaseDate(album.getOriginalReleaseDate());
+                }
+                if (album.getCompilation() != null) {
+                    existing.setCompilation(album.getCompilation());
+                }
+                if (album.getReleaseTypes() != null) {
+                    existing.setReleaseTypes(album.getReleaseTypes());
+                }
+                if (album.getRecordLabels() != null) {
+                    existing.setRecordLabels(album.getRecordLabels());
+                }
+                if (album.getGenre() != null) {
+                    existing.setGenre(album.getGenre());
+                }
+                if (album.getMusicBrainzReleaseId() != null) {
+                    existing.setMusicBrainzReleaseId(album.getMusicBrainzReleaseId());
+                }
+                if (album.getCreated() != null) {
+                    existing.setCreated(album.getCreated());
+                }
+                if (album.getLastScanned() != null) {
+                    existing.setLastScanned(album.getLastScanned());
+                }
+                if (album.getFolder() != null) {
+                    existing.setFolder(album.getFolder());
+                }
+                if (album.getArt() != null) {
+                    existing.setArt(album.getArt());
+                }
+                existing.setPresent(album.isPresent());
+                existing.setDuration(album.getDuration());
+                existing.setSongCount(album.getSongCount());
+                return albumRepository.save(existing);
+            }
+        }
+        return albumRepository.save(album);
     }
 
 }

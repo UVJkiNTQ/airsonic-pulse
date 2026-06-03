@@ -253,7 +253,11 @@ public class ArtistService {
                 }
                 existing.setPresent(artist.isPresent());
                 existing.setAlbumCount(artist.getAlbumCount());
-                return artistRepository.save(existing);
+                Artist saved = artistRepository.save(existing);
+                // Propagate the ID back to the original artist object so callers
+                // (e.g., updateArtist → indexManager.index) can use artist.getId()
+                artist.setId(saved.getId());
+                return saved;
             }
         }
         return artistRepository.save(artist);

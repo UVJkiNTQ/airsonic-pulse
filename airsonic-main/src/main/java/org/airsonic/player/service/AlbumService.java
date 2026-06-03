@@ -429,7 +429,11 @@ public class AlbumService {
                 existing.setPresent(album.isPresent());
                 existing.setDuration(album.getDuration());
                 existing.setSongCount(album.getSongCount());
-                return albumRepository.save(existing);
+                Album saved = albumRepository.save(existing);
+                // Propagate the ID back to the original album object so callers
+                // (e.g., updateAlbum → indexManager.index) can use album.getId()
+                album.setId(saved.getId());
+                return saved;
             }
         }
         return albumRepository.save(album);

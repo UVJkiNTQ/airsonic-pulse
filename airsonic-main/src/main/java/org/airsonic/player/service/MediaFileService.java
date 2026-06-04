@@ -821,29 +821,57 @@ public class MediaFileService {
 
         // cue tracks
         if (isEnableCueIndexing) {
+            // Track which bare file keys have been consumed by at least one cue sheet.
+            // This allows multiple cue sheets in the same directory to share a single
+            // base audio file (e.g. standard cue + SP variant).
+            Set<String> consumedBases = ConcurrentHashMap.newKeySet();
+
             List<MediaFile> indexedTracks = cueSheets.entrySet().parallelStream().flatMap(e -> {
                 String indexPath = e.getKey();
                 CueSheet cueSheet = e.getValue();
 
                 String filePath = cueSheet.getFileData().get(0).getFile();
-                MediaFile base = bareFiles.remove(FilenameUtils.getName(filePath));
+                String baseKey = FilenameUtils.getName(filePath);
+                MediaFile base = bareFiles.get(baseKey);
+
+                // If not found as a direct sibling, try resolving a subdirectory
+                // path in the FILE directive relative to the cue file's directory.
+                if (base == null && filePath.contains("/")) {
+                    Path resolvedAudio = parent.getFullPath().resolve(filePath).normalize();
+                    if (Files.exists(resolvedAudio) && includeMediaFileByPath(resolvedAudio)) {
+                        Path relativeToFolder = folder.getPath().relativize(resolvedAudio);
+                        base = createMediaFileByFile(relativeToFolder, folder);
+                        if (base != null) {
+                            updateMediaFile(base);
+                        }
+                    }
+                }
 
                 if (Objects.nonNull(base)) {
-                    base.setIndexPath(indexPath); // update indexPath in mediaFile
-                    Instant mediaChanged = FileUtil.lastModified(base.getFullPath());
-                    Instant cueChanged = FileUtil.lastModified(base.getFullIndexPath());
-                    base.setChanged(mediaChanged.compareTo(cueChanged) >= 0 ? mediaChanged : cueChanged);
-                    updateMediaFile(base);
+                    boolean isFirstConsumer = consumedBases.add(baseKey);
+                    if (isFirstConsumer) {
+                        base.setIndexPath(indexPath); // update indexPath in mediaFile
+                        Instant mediaChanged = FileUtil.lastModified(base.getFullPath());
+                        Instant cueChanged = FileUtil.lastModified(base.getFullIndexPath());
+                        base.setChanged(mediaChanged.compareTo(cueChanged) >= 0 ? mediaChanged : cueChanged);
+                        updateMediaFile(base);
+                    }
                     List<MediaFile> tracks = createIndexedTracks(base, cueSheet);
                     // remove stored children that are now indexed
                     tracks.forEach(t -> storedChildrenMap.remove(Pair.of(t.getPath(), t.getStartPosition())));
-                    tracks.add(base);
+                    if (isFirstConsumer) {
+                        tracks.add(base);
+                    }
                     return tracks.stream();
                 } else {
                     LOG.warn("Could not find base file '{}' for cue sheet {}", filePath, indexPath);
                     return Stream.empty();
                 }
             }).toList();
+
+            // Remove consumed base files from bareFiles so they are not
+            // re-added as non-indexed tracks.
+            consumedBases.forEach(bareFiles::remove);
             result.addAll(indexedTracks);
         }
 

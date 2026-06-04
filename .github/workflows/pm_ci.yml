@@ -39,3 +39,20 @@ jobs:
         run: mkdir -p /tmp/music
       - name: Build and test
         run: mvn clean verify
+
+      - name: Generate checksums
+        run: |
+          cd airsonic-main/target
+          sha256sum airsonic.war > artifacts-checksums.sha256
+
+      - name: Upload .war artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: airsonic.war
+          path: airsonic-main/target/airsonic.war
+
+      - name: Upload checksums artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: artifacts-checksums.sha256
+          path: airsonic-main/target/artifacts-checksums.sha256

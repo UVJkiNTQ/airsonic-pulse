@@ -821,18 +821,16 @@ public class MediaFileService {
 
         // cue tracks
         if (isEnableCueIndexing) {
-            // Track which bare file keys have been consumed by at least one cue sheet.
-            // This allows multiple cue sheets in the same directory to share a single
-            // base audio file (e.g. standard cue + SP variant).
-            Set<String> consumedBases = ConcurrentHashMap.newKeySet();
-
             List<MediaFile> indexedTracks = cueSheets.entrySet().parallelStream().flatMap(e -> {
                 String indexPath = e.getKey();
                 CueSheet cueSheet = e.getValue();
 
                 String filePath = cueSheet.getFileData().get(0).getFile();
-                String baseKey = FilenameUtils.getName(filePath);
-                MediaFile base = bareFiles.get(baseKey);
+                MediaFile base = bareFiles.get(FilenameUtils.getName(filePath));
+                // Immediately remove to maintain original single-consumer semantics.
+                // If another cue sheet already consumed this base file, get() will
+                // still return it (shared base scenario) but remove() returns null.
+                boolean isFirstConsumer = bareFiles.remove(FilenameUtils.getName(filePath)) != null;
 
                 // If not found as a direct sibling, try resolving a subdirectory
                 // path in the FILE directive relative to the cue file's directory.
@@ -843,12 +841,12 @@ public class MediaFileService {
                         base = createMediaFileByFile(relativeToFolder, folder);
                         if (base != null) {
                             updateMediaFile(base);
+                            isFirstConsumer = true;
                         }
                     }
                 }
 
                 if (Objects.nonNull(base)) {
-                    boolean isFirstConsumer = consumedBases.add(baseKey);
                     if (isFirstConsumer) {
                         base.setIndexPath(indexPath); // update indexPath in mediaFile
                         Instant mediaChanged = FileUtil.lastModified(base.getFullPath());
@@ -868,10 +866,6 @@ public class MediaFileService {
                     return Stream.empty();
                 }
             }).toList();
-
-            // Remove consumed base files from bareFiles so they are not
-            // re-added as non-indexed tracks.
-            consumedBases.forEach(bareFiles::remove);
             result.addAll(indexedTracks);
         }
 

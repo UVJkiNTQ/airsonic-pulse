@@ -300,8 +300,15 @@ public class MediaScannerService {
             pool.submit(() -> {
                 foldersToScan
                         .parallelStream()
-                        .forEach(musicFolder -> scanFile(pool, null, null, mediaFileService.getMediaFile(Paths.get(""), musicFolder, false),
-                                musicFolder, statistics, albumCount, artists, albums, albumsInDb, genres));
+                        .forEach(musicFolder -> {
+                            MediaFile rootFile = mediaFileService.getMediaFile(Paths.get(""), musicFolder, false);
+                            if (rootFile == null) {
+                                LOG.warn("Could not resolve root MediaFile for music folder: {} (path: {})", musicFolder.getName(), musicFolder.getPath());
+                                return;
+                            }
+                            scanFile(pool, null, null, rootFile,
+                                    musicFolder, statistics, albumCount, artists, albums, albumsInDb, genres);
+                        });
                 // Update statistics
                 statistics.incrementArtists(albumCount.size());
                 statistics.incrementAlbums(albumCount.values().parallelStream().mapToInt(x -> x.get()).sum());
@@ -385,6 +392,11 @@ public class MediaScannerService {
     private void scanFile(ForkJoinPool pool, MediaFile grandParent, MediaFile parent, MediaFile file, MusicFolder musicFolder, MediaLibraryStatistics statistics,
             Map<String, AtomicInteger> albumCount, Map<String, Artist> artists, Map<String, Album> albums,
             Set<Integer> albumsInDb, Genres genres) {
+
+        if (file == null) {
+            LOG.warn("scanFile called with null file for music folder: {} (path: {})", musicFolder.getName(), musicFolder.getPath());
+            return;
+        }
 
         if (!isMediaScanning()) {
             LOG.debug("Scan cancelled.");

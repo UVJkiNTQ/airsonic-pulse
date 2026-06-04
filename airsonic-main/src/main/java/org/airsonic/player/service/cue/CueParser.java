@@ -204,6 +204,11 @@ public class CueParser {
         // Skip negative track numbers
         if (trackNumber < 0) {
             LOG.debug("Skipping negative track number on line {}: {}", lineNumber, trackNumber);
+            // Create a sink TrackData to absorb subsequent track-level metadata lines
+            // (TITLE, PERFORMER, INDEX, etc.) so they don't incorrectly overwrite
+            // album-level metadata. This sink is NOT added to the file's track list.
+            String dataType = parts[2].toUpperCase();
+            currentTrackData = new TrackData(currentFileData, trackNumber, dataType);
             return;
         }
 

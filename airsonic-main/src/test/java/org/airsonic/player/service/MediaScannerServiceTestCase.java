@@ -734,18 +734,25 @@ public class MediaScannerServiceTestCase {
         List<MusicFolder> folders = new ArrayList<>();
         folders.add(musicFolder);
 
-        // Test that the artist is correctly imported
+        // Test that the artist is correctly imported (TRACK -1 is skipped, TRACK 02 is valid)
         List<Artist> allArtists = artistService.getAlphabeticalArtists(folders);
-        assertEquals(0, allArtists.size());
+        assertEquals(1, allArtists.size());
+        Artist artist = allArtists.get(0);
+        assertEquals("TestCue3Artist", artist.getName());
+        assertEquals(1, artist.getAlbumCount());
 
 
         // Test that the album is correctly imported
         List<Album> allAlbums = albumService.getAlphabeticalAlbums(true, true, folders);
-        assertEquals(0, allAlbums.size());
+        assertEquals(1, allAlbums.size());
+        Album album = allAlbums.get(0);
+        assertEquals("AirsonicTest3", album.getName());
+        assertEquals("TestCue3Artist", album.getArtist());
+        assertEquals(1, album.getSongCount());
 
         // Test that the music file is correctly imported
-        List<MediaFile> albumFiles = mediaFileRepository.findByFolderAndParentPath(folders.get(0), "", Sort.by("startPosition"));
-        assertEquals(1, albumFiles.size());
+        List<MediaFile> albumFiles = mediaFileRepository.findByFolderAndParentPath(allAlbums.get(0).getFolder(), allAlbums.get(0).getPath(), Sort.by("startPosition"));
+        assertEquals(2, albumFiles.size());
         MediaFile file = albumFiles.get(0);
         assertEquals("airsonic-test", file.getTitle());
         assertEquals("wav", file.getFormat());
@@ -754,10 +761,23 @@ public class MediaScannerServiceTestCase {
         assertNull(file.getAlbumArtist());
         assertNull(file.getTrackNumber());
         assertNull(file.getYear());
-        assertEquals("", file.getParentPath());
-        assertEquals("airsonic-test.wav", file.getPath());
-        assertNull(file.getIndexPath());
+        assertEquals(album.getPath(), file.getParentPath());
+        assertEquals(Paths.get(album.getPath()).resolve("airsonic-test.wav").toString(), file.getPath());
+        assertTrue(file.getIndexPath().contains("airsonic-test.cue"));
         assertEquals(-1.0d, file.getStartPosition(), 0.0d);
+
+        MediaFile track2 = albumFiles.get(1);
+        assertEquals("Jesu, Joy of Man's Desiring3", track2.getTitle());
+        assertEquals("wav", track2.getFormat());
+        assertEquals("AirsonicTest3", track2.getAlbumName());
+        assertEquals("Lipatti3", track2.getArtist());
+        assertEquals("TestCue3Artist", track2.getAlbumArtist());
+        assertEquals(2L, (long) track2.getTrackNumber());
+        assertNull(track2.getYear());
+        assertEquals(album.getPath(), track2.getParentPath());
+        assertEquals(Paths.get(album.getPath()).resolve("airsonic-test.wav").toString(), track2.getPath());
+        assertNull(track2.getIndexPath());
+        assertTrue(track2.getStartPosition() > 0);
     }
 
 

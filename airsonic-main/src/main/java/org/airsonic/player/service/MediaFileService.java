@@ -956,7 +956,13 @@ public class MediaFileService {
         }
 
         // Exclude all hidden files starting with a single "." or "@eaDir" (thumbnail dir created on Synology devices).
-        return (name.startsWith(".") && !name.startsWith("..")) || name.startsWith("@eaDir") || "Thumbs.db".equals(name);
+        // But allow dot-files that are valid media files (e.g., ".banbanshi - track.flac")
+        // which are common in Japanese doujin music releases.
+        if ((name.startsWith(".") && !name.startsWith("..")) || name.startsWith("@eaDir") || "Thumbs.db".equals(name)) {
+            String suffix = FilenameUtils.getExtension(name).toLowerCase();
+            return !isAudioFile(suffix) && !isVideoFile(suffix);
+        }
+        return false;
     }
 
     /**
@@ -1392,23 +1398,32 @@ public class MediaFileService {
             switch (ext) {
                 case "cue":
                     Charset cs = Charset.forName("UTF-8"); // default to UTF-8
-                    // attempt to detect encoding for cueFile, fallback to UTF-8
-                    int THRESHOLD = 35; // 0-100, the higher the more certain the guess
-                    CharsetDetector cd = new CharsetDetector();
+                    // Check for BOM first — BOM is a definitive indicator of UTF-8
+                    boolean bomFound = false;
                     try (FileInputStream fis = new FileInputStream(cueFile.toFile());
-                        BufferedInputStream bis = new BufferedInputStream(fis);) {
-                        cd.setText(bis);
-                        CharsetMatch cm = cd.detect();
-                        if (cm != null && cm.getConfidence() > THRESHOLD) {
-                            cs = Charset.forName(cm.getName());
-                        }
-                        LOG.debug("Detected charset for cuesheet file {}: Charset detected as {}", cueFile, cs);
+                        BufferedInputStream bis = new BufferedInputStream(fis)) {
                         bis.mark(3);
-
-                        // check for BOM
                         byte[] bom = new byte[3];
                         int bytesRead = bis.read(bom, 0, 3);
-                        if (!hasBOM(bom, bytesRead)) {
+                        if (hasBOM(bom, bytesRead)) {
+                            bomFound = true;
+                            cs = Charset.forName("UTF-8");
+                            LOG.debug("Detected BOM for cuesheet file {}, forcing UTF-8", cueFile);
+                        } else {
+                            bis.reset();
+                        }
+
+                        // attempt to detect encoding for cueFile, fallback to UTF-8
+                        if (!bomFound) {
+                            int THRESHOLD = 35; // 0-100, the higher the more certain the guess
+                            CharsetDetector cd = new CharsetDetector();
+                            cd.setText(bis);
+                            CharsetMatch cm = cd.detect();
+                            if (cm != null && cm.getConfidence() > THRESHOLD) {
+                                cs = Charset.forName(cm.getName());
+                            }
+                            LOG.debug("Detected charset for cuesheet file {}: Charset detected as {}", cueFile, cs);
+                            // reset stream for parsing
                             bis.reset();
                         }
                         cueSheet = CueParser.parse(bis, cs);

@@ -50,7 +50,7 @@ public class MediaFile {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Integer id;
 
-    @Column(name = "path", nullable = false)
+    @Column(name = "path", nullable = false, length = 1024)
     private String path;
 
     @ManyToOne
@@ -64,31 +64,31 @@ public class MediaFile {
     @Column(name = "start_position", nullable = true)
     private Double startPosition = NOT_INDEXED; // i.e. not an indexed track
 
-    @Column(name = "format", nullable = true)
+    @Column(name = "format", nullable = true, length = 1024)
     private String format;
 
-    @Column(name = "title", nullable = true)
+    @Column(name = "title", nullable = true, length = 1024)
     private String title;
 
-    @Column(name = "sort_name", nullable = true)
+    @Column(name = "sort_name", nullable = true, length = 1024)
     private String sortName;
 
-    @Column(name = "album", nullable = true)
+    @Column(name = "album", nullable = true, length = 1024)
     private String albumName;
 
-    @Column(name = "album_sort_name", nullable = true)
+    @Column(name = "album_sort_name", nullable = true, length = 1024)
     private String albumSortName;
 
-    @Column(name = "artist", nullable = true)
+    @Column(name = "artist", nullable = true, length = 1024)
     private String artist;
 
-    @Column(name = "album_artist", nullable = true)
+    @Column(name = "album_artist", nullable = true, length = 1024)
     private String albumArtist;
 
     @Column(name = "disc_number", nullable = true)
     private Integer discNumber;
 
-    @Column(name = "disc_subtitle", nullable = true)
+    @Column(name = "disc_subtitle", nullable = true, length = 1024)
     private String discSubtitle;
 
     @Column(name = "track_number", nullable = true)
@@ -97,31 +97,31 @@ public class MediaFile {
     @Column(name = "year", nullable = true)
     private Integer year;
 
-    @Column(name = "release_date", nullable = true)
+    @Column(name = "release_date", nullable = true, length = 1024)
     private String releaseDate;
 
-    @Column(name = "original_release_date", nullable = true)
+    @Column(name = "original_release_date", nullable = true, length = 1024)
     private String originalReleaseDate;
 
     @Column(name = "is_compilation", nullable = true)
     private Boolean compilation;
 
-    @Column(name = "release_types", nullable = true)
+    @Column(name = "release_types", nullable = true, length = 1024)
     private String releaseTypes;
 
-    @Column(name = "record_labels", nullable = true)
+    @Column(name = "record_labels", nullable = true, length = 1024)
     private String recordLabels;
 
     @Column(name = "bpm", nullable = true)
     private Integer bpm;
 
-    @Column(name = "genre", nullable = true)
+    @Column(name = "genre", nullable = true, length = 1024)
     private String genre;
 
-    @Column(name = "genres", nullable = true)
+    @Column(name = "genres", nullable = true, length = 1024)
     private String genres;
 
-    @Column(name = "contributors", nullable = true)
+    @Column(name = "contributors", nullable = true, length = 1024)
     private String contributors;
 
     @Column(name = "bit_rate", nullable = true)
@@ -142,10 +142,10 @@ public class MediaFile {
     @Column(name = "height", nullable = true)
     private Integer height;
 
-    @Column(name = "parent_path", nullable = true)
+    @Column(name = "parent_path", nullable = true, length = 1024)
     private String parentPath;
 
-    @Column(name = "index_path", nullable = true)
+    @Column(name = "index_path", nullable = true, length = 1024)
     private String indexPath;
 
     @Column(name = "play_count", nullable = false)
@@ -154,7 +154,7 @@ public class MediaFile {
     @Column(name = "last_played", nullable = true)
     private Instant lastPlayed;
 
-    @Column(name = "comment", nullable = true)
+    @Column(name = "comment", nullable = true, length = 1024)
     private String comment;
 
     @Column(name = "created", nullable = false)
@@ -178,16 +178,16 @@ public class MediaFile {
     @Column(name = "version", nullable = false)
     private int version = VERSION;
 
-    @Column(name = "mb_release_id", nullable = true)
+    @Column(name = "mb_release_id", nullable = true, length = 1024)
     private String musicBrainzReleaseId;
 
-    @Column(name = "mb_recording_id", nullable = true)
+    @Column(name = "mb_recording_id", nullable = true, length = 1024)
     private String musicBrainzRecordingId;
 
-    @Column(name = "mb_artist_id", nullable = true)
+    @Column(name = "mb_artist_id", nullable = true, length = 1024)
     private String musicBrainzArtistId;
 
-    @Column(name = "artist_sort_name", nullable = true)
+    @Column(name = "artist_sort_name", nullable = true, length = 1024)
     private String artistSortName;
 
     @Column(name = "rg_track_gain", nullable = true)

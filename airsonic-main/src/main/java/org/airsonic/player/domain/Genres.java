@@ -23,6 +23,7 @@ import org.apache.commons.lang3.StringUtils;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
@@ -41,24 +42,32 @@ public class Genres {
      * Increments the album count for a single, already-split genre token. Callers are expected
      * to feed pre-resolved tokens (typically via {@link #split(String, String)} on a packed
      * multi-value column); blank tokens are ignored so callers do not have to filter.
+     * <p>
+     * The genre name is lower-cased for case-insensitive deduplication so that genre names
+     * differing only in case (e.g. "acg" vs "ACG") are treated as the same genre in the DB,
+     * which typically uses a case-insensitive collation on the primary key column.
      */
     public void incrementAlbumCount(String genreName) {
         if (StringUtils.isBlank(genreName)) {
             return;
         }
-        genres.computeIfAbsent(genreName, Genre::new).incrementAlbumCount();
+        genres.computeIfAbsent(genreName.toLowerCase(Locale.ENGLISH), Genre::new).incrementAlbumCount();
     }
 
     /**
      * Increments the song count for a single, already-split genre token. Callers are expected
      * to feed pre-resolved tokens (typically via {@link #split(String, String)} on a packed
      * multi-value column); blank tokens are ignored so callers do not have to filter.
+     * <p>
+     * The genre name is lower-cased for case-insensitive deduplication so that genre names
+     * differing only in case (e.g. "acg" vs "ACG") are treated as the same genre in the DB,
+     * which typically uses a case-insensitive collation on the primary key column.
      */
     public void incrementSongCount(String genreName) {
         if (StringUtils.isBlank(genreName)) {
             return;
         }
-        genres.computeIfAbsent(genreName, Genre::new).incrementSongCount();
+        genres.computeIfAbsent(genreName.toLowerCase(Locale.ENGLISH), Genre::new).incrementSongCount();
     }
 
     public List<Genre> getGenres() {

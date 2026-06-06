@@ -38,7 +38,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class Genre {
 
     @Id
-    @Column(name = "name")
+    @Column(name = "name", length = 1024)
     private String name;
 
     @Column(name = "song_count")

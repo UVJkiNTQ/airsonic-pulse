@@ -76,8 +76,9 @@ public class GenresTest {
         g.incrementSongCount("Rock");
         g.incrementSongCount("Metal");
 
-        Genre rock = findGenre(g, "Rock");
-        Genre metal = findGenre(g, "Metal");
+        // Names are lower-cased for case-insensitive DB deduplication
+        Genre rock = findGenre(g, "rock");
+        Genre metal = findGenre(g, "metal");
         assertEquals(2, rock.getSongCount());
         assertEquals(0, rock.getAlbumCount());
         assertEquals(1, metal.getSongCount());
@@ -91,8 +92,9 @@ public class GenresTest {
         g.incrementAlbumCount("Rock");
         g.incrementAlbumCount("Metal");
 
-        Genre rock = findGenre(g, "Rock");
-        Genre metal = findGenre(g, "Metal");
+        // Names are lower-cased for case-insensitive DB deduplication
+        Genre rock = findGenre(g, "rock");
+        Genre metal = findGenre(g, "metal");
         assertEquals(2, rock.getAlbumCount());
         assertEquals(0, rock.getSongCount());
         assertEquals(1, metal.getAlbumCount());

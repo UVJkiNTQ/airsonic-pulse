@@ -461,16 +461,20 @@ public class MediaScannerServiceTestCase {
     }
 
     private int songCountOf(org.airsonic.player.domain.Genres g, String name) {
+        // Names are lower-cased by Genres for case-insensitive DB deduplication
+        String lowerName = name.toLowerCase();
         return g.getGenres().stream()
-                .filter(x -> name.equals(x.getName()))
+                .filter(x -> lowerName.equals(x.getName()))
                 .findFirst()
                 .map(org.airsonic.player.domain.Genre::getSongCount)
                 .orElse(0);
     }
 
     private int albumCountOf(org.airsonic.player.domain.Genres g, String name) {
+        // Names are lower-cased by Genres for case-insensitive DB deduplication
+        String lowerName = name.toLowerCase();
         return g.getGenres().stream()
-                .filter(x -> name.equals(x.getName()))
+                .filter(x -> lowerName.equals(x.getName()))
                 .findFirst()
                 .map(org.airsonic.player.domain.Genre::getAlbumCount)
                 .orElse(0);

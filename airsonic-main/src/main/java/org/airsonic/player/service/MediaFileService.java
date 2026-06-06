@@ -134,6 +134,10 @@ public class MediaFileService {
 
     private final Map<Integer, Pair<Integer, Instant>> lastPlayed = new ConcurrentHashMap<>();
 
+    // Maximum length for VARCHAR columns as defined by Liquibase ${varchar_type}.
+    // On MySQL/MariaDB the default is 1024; on HSQLDB/PostgreSQL there is no hard limit.
+    static final int MAX_VARCHAR_LENGTH = 1024;
+
     private boolean hasBOM(byte[] bom, int bytesRead) {
         return bytesRead == 3 && bom[0] == (byte) 0xEF && bom[1] == (byte) 0xBB && bom[2] == (byte) 0xBF;
     }
@@ -572,6 +576,9 @@ public class MediaFileService {
      */
     @Transactional
     public List<Genre> updateGenres(List <Genre> genres) {
+        // Use deleteAllInBatch to issue a single JPQL DELETE, avoiding entity lifecycle issues.
+        // Then insert the freshly computed genre set.
+        genreRepository.deleteAllInBatch();
         return genreRepository.saveAll(genres);
     }
 
@@ -1038,11 +1045,11 @@ public class MediaFileService {
             MetaDataParser parser = metaDataParserFactory.getParser(file);
             if (parser != null) {
                 MetaData metaData = parser.getMetaData(file);
-                mediaFile.setArtist(metaData.getArtist());
-                mediaFile.setAlbumArtist(metaData.getAlbumArtist());
+                mediaFile.setArtist(truncate(metaData.getArtist(), MAX_VARCHAR_LENGTH));
+                mediaFile.setAlbumArtist(truncate(metaData.getAlbumArtist(), MAX_VARCHAR_LENGTH));
                 mediaFile.setAlbumName(metaData.getAlbumName());
                 mediaFile.setAlbumSortName(metaData.getAlbumSortName());
-                mediaFile.setTitle(metaData.getTitle());
+                mediaFile.setTitle(truncate(metaData.getTitle(), MAX_VARCHAR_LENGTH));
                 mediaFile.setSortName(metaData.getSortName());
                 mediaFile.setDiscNumber(metaData.getDiscNumber());
                 mediaFile.setDiscSubtitle(metaData.getDiscSubtitle());
@@ -1065,7 +1072,7 @@ public class MediaFileService {
                 mediaFile.setMusicBrainzReleaseId(metaData.getMusicBrainzReleaseId());
                 mediaFile.setMusicBrainzRecordingId(metaData.getMusicBrainzRecordingId());
                 mediaFile.setMusicBrainzArtistId(metaData.getMusicBrainzArtistId());
-                mediaFile.setArtistSortName(metaData.getArtistSortName());
+                mediaFile.setArtistSortName(truncate(metaData.getArtistSortName(), MAX_VARCHAR_LENGTH));
                 mediaFile.setReplayGainTrackGain(metaData.getReplayGainTrackGain());
                 mediaFile.setReplayGainAlbumGain(metaData.getReplayGainAlbumGain());
                 mediaFile.setReplayGainTrackPeak(metaData.getReplayGainTrackPeak());
@@ -1095,13 +1102,13 @@ public class MediaFileService {
                         MetaDataParser parser = metaDataParserFactory.getParser(firstChild);
                         if (parser != null) {
                             MetaData metaData = parser.getMetaData(firstChild);
-                            mediaFile.setArtist(metaData.getAlbumArtist());
+                            mediaFile.setArtist(truncate(metaData.getAlbumArtist(), MAX_VARCHAR_LENGTH));
                             mediaFile.setAlbumName(metaData.getAlbumName());
                             mediaFile.setYear(metaData.getYear());
                             mediaFile.setGenre(metaData.getGenre());
                         }
                     } else {
-                        mediaFile.setArtist(file.getFileName().toString());
+                        mediaFile.setArtist(truncate(file.getFileName().toString(), MAX_VARCHAR_LENGTH));
                     }
                     // Look for cover art.
                     Path coverArt = findCoverArt(children);
@@ -1113,7 +1120,7 @@ public class MediaFileService {
                 } catch (IOException e) {
                     LOG.warn("Could not retrieve children for {}.", file.toString(), e);
 
-                    mediaFile.setArtist(file.getFileName().toString());
+                    mediaFile.setArtist(truncate(file.getFileName().toString(), MAX_VARCHAR_LENGTH));
                 }
             } else {
                 // root folders need to have a title
@@ -1813,6 +1820,17 @@ public class MediaFileService {
         }
         String separator = (separators == null || separators.isEmpty()) ? ";" : separators.substring(0, 1);
         return String.join(separator, clean);
+    }
+
+    /**
+     * Truncates a string to the given maximum length (in Java characters).
+     * Returns null if the input is null.
+     */
+    static String truncate(String value, int maxLength) {
+        if (value == null) {
+            return null;
+        }
+        return value.length() <= maxLength ? value : value.substring(0, maxLength);
     }
 
     /**

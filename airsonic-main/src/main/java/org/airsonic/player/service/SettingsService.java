@@ -256,7 +256,7 @@ public class SettingsService {
     private static final String DEFAULT_DATABASE_USERNAME = null;
     private static final String DEFAULT_DATABASE_PASSWORD = null;
     private static final String DEFAULT_DATABASE_JNDI_NAME = null;
-    private static final Integer DEFAULT_DATABASE_MIGRATION_PARAMETER_MYSQL_VARCHAR_MAXLENGTH = 384;
+    private static final Integer DEFAULT_DATABASE_MIGRATION_PARAMETER_MYSQL_VARCHAR_MAXLENGTH = 1024;
     public static final String DEFAULT_JDBC_USERNAME = "sa";
     public static final String DEFAULT_JDBC_PASSWORD = "";
 

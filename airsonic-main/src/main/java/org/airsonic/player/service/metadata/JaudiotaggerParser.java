@@ -70,17 +70,8 @@ public class JaudiotaggerParser extends MetaDataParser {
 
     private static final Logger LOG = LoggerFactory.getLogger(JaudiotaggerParser.class);
 
-    static final String RG_TRACK_GAIN = "REPLAYGAIN_TRACK_GAIN";
-    static final String RG_ALBUM_GAIN = "REPLAYGAIN_ALBUM_GAIN";
-    static final String RG_TRACK_PEAK = "REPLAYGAIN_TRACK_PEAK";
-    static final String RG_ALBUM_PEAK = "REPLAYGAIN_ALBUM_PEAK";
-
-    // Opus carries EBU R128 gain (an integer Q7.8 fixed-point value referenced to -23 LUFS)
-    // rather than ReplayGain dB referenced to -18 dBFS. Both can co-exist on the same file;
-    // RG is preferred when present and R128 is converted to RG-equivalent dB otherwise. See
-    // {@link #parseR128GainQ78} for the conversion.
-    static final String R128_TRACK_GAIN = "R128_TRACK_GAIN";
-    static final String R128_ALBUM_GAIN = "R128_ALBUM_GAIN";
+    // ReplayGain + Opus R128 tag-name constants live on {@link MetaDataParser} so both
+    // JaudiotaggerParser and FFmpegParser reference one source of truth.
 
     // MP4 stores ReplayGain in iTunes-style reverse-DNS freeform atoms keyed by lowercase
     // descriptor (replaygain_track_gain, replaygain_album_gain, replaygain_track_peak,
@@ -370,27 +361,6 @@ public class JaudiotaggerParser extends MetaDataParser {
     }
 
     /**
-     * Converts an Opus R128 integer gain (Q7.8 fixed-point, referenced to -23 LUFS) to a
-     * ReplayGain-equivalent dB value (ReplayGain 2 is anchored at -18 LUFS):
-     * {@code dB = q78 / 256 + 5}. The +5 dB shift accounts for the difference between EBU
-     * R128's -23 LUFS reference and the ReplayGain 2 -18 LUFS reference; the same mapping is
-     * used by <a href="https://github.com/Moonbase59/loudgain">loudgain</a>,
-     * <a href="https://github.com/complexlogic/rsgain">rsgain</a>, mutagen, and kid3.
-     * Returns {@code null} on blank, non-integer, or out-of-int-range input.
-     */
-    static Double parseR128GainQ78(String raw) {
-        if (raw == null) {
-            return null;
-        }
-        try {
-            int q78 = Integer.parseInt(raw.trim());
-            return q78 / 256.0 + 5.0;
-        } catch (NumberFormatException e) {
-            return null;
-        }
-    }
-
-    /**
      * Updates the given file with the given meta data.
      *
      * @param file     The music file to update.
@@ -446,7 +416,10 @@ public class JaudiotaggerParser extends MetaDataParser {
     }
 
     private static Set<String> imageAvailableFormats = ImmutableSet.of("mp3", "m4a", "m4b", "m4p", "aac", "ogg", "flac", "wav", "aif", "dsf", "aiff", "wma");
-    private static Set<String> applicableFormats = ImmutableSet.of("mp3", "m4a", "m4p", "aac", "ogg", "flac", "wav", "aif", "dsf", "aiff", "wma");
+    // "opus" intentionally NOT included — jaudiotagger 3.0.1 has no Opus reader
+    // (no OPUS entry in SupportedFileFormat; no reader registered for .opus).
+    // Opus R128 support is wired through FFmpegParser instead — see #258 and #226 PR1.
+    private static Set<String> applicableFormats = ImmutableSet.of("mp3", "m4a", "m4b", "m4p", "aac", "ogg", "flac", "wav", "aif", "dsf", "aiff", "wma");
 
     /**
      * Returns whether this parser is applicable to the given file.

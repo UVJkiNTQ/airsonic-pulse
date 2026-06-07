@@ -576,9 +576,6 @@ public class MediaFileService {
      */
     @Transactional
     public List<Genre> updateGenres(List <Genre> genres) {
-        // Use deleteAllInBatch to issue a single JPQL DELETE, avoiding entity lifecycle issues.
-        // Then insert the freshly computed genre set.
-        genreRepository.deleteAllInBatch();
         return genreRepository.saveAll(genres);
     }
 

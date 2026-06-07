@@ -21,6 +21,7 @@
 package org.airsonic.player.domain;
 
 import org.airsonic.player.repository.AtomicIntegerConverter;
+import org.springframework.data.domain.Persistable;
 
 import jakarta.persistence.*;
 
@@ -35,7 +36,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 @Entity
 @Table(name = "genre")
-public class Genre {
+public class Genre implements Persistable<String> {
 
     @Id
     @Column(name = "name", length = 1024)
@@ -60,6 +61,16 @@ public class Genre {
         this.name = name;
         this.songCount.set(songCount);
         this.albumCount.set(albumCount);
+    }
+
+    @Override
+    public String getId() {
+        return name;
+    }
+
+    @Override
+    public boolean isNew() {
+        return false;
     }
 
     public String getName() {

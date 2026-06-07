@@ -576,7 +576,8 @@ public class MediaFileService {
      */
     @Transactional
     public List<Genre> updateGenres(List <Genre> genres) {
-        return genreRepository.saveAll(genres);
+        genres.forEach(genreRepository::upsert);
+        return genres;
     }
 
     /**

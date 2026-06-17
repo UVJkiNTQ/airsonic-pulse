@@ -211,7 +211,9 @@ public class SubsonicID3Controller extends AbstractSubsonicController {
         }
         AlbumList2 result = new AlbumList2();
         for (Album album : albums) {
-            result.getAlbum().add(jaxbContentService.createJaxbAlbum(new AlbumID3(), album, username));
+            // Use 4-arg overload with tracks so cover art fallback can use first track's parent dir
+            List<MediaFile> tracks = mediaFileService.getSongsForAlbum(album.getArtist(), album.getName());
+            result.getAlbum().add(jaxbContentService.createJaxbAlbum(new AlbumID3(), album, username, tracks));
         }
         Response res = createResponse();
         res.setAlbumList2(result);

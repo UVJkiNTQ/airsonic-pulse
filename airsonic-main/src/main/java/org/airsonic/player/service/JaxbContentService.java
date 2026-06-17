@@ -119,10 +119,11 @@ public class JaxbContentService {
     }
 
     public <T extends AlbumID3> T createJaxbAlbum(T jaxbAlbum, Album album, String username) {
-        // The 3-arg overload is used by list endpoints (getAlbumList2, getStarred2, getArtist,
-        // search). Passing null tracks here keeps those paths free of per-album track fetches —
-        // discTitles only populates when the caller already has the album's songs in hand.
-        return createJaxbAlbum(jaxbAlbum, album, username, null);
+        // Load album tracks so discTitles and cover art can be populated.
+        // The single getSongsForAlbum call is shared for both discTitles and the
+        // cover art fallback in the 4-arg overload.
+        List<MediaFile> albumTracks = mediaFileService.getSongsForAlbum(album.getArtist(), album.getName());
+        return createJaxbAlbum(jaxbAlbum, album, username, albumTracks);
     }
 
     public <T extends AlbumID3> T createJaxbAlbum(T jaxbAlbum, Album album, String username, List<MediaFile> albumTracks) {
@@ -137,6 +138,15 @@ public class JaxbContentService {
         }
         if (!CoverArt.NULL_ART.equals(coverArtService.getAlbumArt(album.getId()))) {
             jaxbAlbum.setCoverArt(CoverArtController.ALBUM_COVERART_PREFIX + album.getId());
+        } else if (albumTracks != null && !albumTracks.isEmpty()) {
+            // Fallback: use first track's parent directory cover art (same logic as songs)
+            // This works even when cover_art table lacks ALBUM entries (e.g., after fresh scan)
+            MediaFile firstTrack = albumTracks.get(0);
+            MediaFile parent = mediaFileService.getParentOf(firstTrack);
+            String coverArt = findCoverArt(firstTrack, parent);
+            if (coverArt != null) {
+                jaxbAlbum.setCoverArt(coverArt);
+            }
         }
         jaxbAlbum.setSongCount(album.getSongCount());
         jaxbAlbum.setDuration((int) Math.round(album.getDuration()));

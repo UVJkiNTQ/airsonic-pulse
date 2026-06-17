@@ -419,6 +419,9 @@ public class MediaScannerService {
         try {
             pool.submit(() -> {
                 if (file.isDirectory()) {
+                    // Update directory metadata (including findCoverArt) BEFORE recursing
+                    // so updateAlbum/updateArtist can read parent.getArt() for child files.
+                    mediaFileService.updateMediaFile(file);
                     try (Stream<MediaFile> children = mediaFileService.getChildrenOf(file, true, true, false, false)
                             .parallelStream()) {
                         children.forEach(child -> scanFile(pool, parent, file, child, musicFolder, statistics, albumCount,
@@ -432,7 +435,8 @@ public class MediaScannerService {
                     statistics.incrementSongs(1);
                 }
 
-                if (file.isPresent() && (file.getLastScanned() == null || file.getLastScanned().isBefore(statistics.getScanDate()))) {
+                // Directories were already updated before recursing into children
+                if (!file.isDirectory() && file.isPresent() && (file.getLastScanned() == null || file.getLastScanned().isBefore(statistics.getScanDate()))) {
                     file.setLastScanned(statistics.getScanDate());
                     mediaFileService.updateMediaFile(file);
                 }
@@ -568,7 +572,11 @@ public class MediaScannerService {
         }
 
         if (album.getArt() == null && parent != null) {
-            CoverArt art = coverArtService.getMediaFileArt(parent.getId());
+            // Check transient parent art first (set during directory scan, not yet persisted)
+            CoverArt art = parent.getArt();
+            if (art == null || CoverArt.NULL_ART.equals(art)) {
+                art = coverArtService.getMediaFileArt(parent.getId());
+            }
             if (!CoverArt.NULL_ART.equals(art)) {
                 album.setArt(new CoverArt(-1, EntityType.ALBUM, art.getPath(), art.getFolder(), false));
             }
@@ -644,7 +652,11 @@ public class MediaScannerService {
         // directory structure is /artist/album/track
         // if the artist has no art, use the grand parent's art
         if (grandParent != null && artist.getArt() == null) {
-            CoverArt art = coverArtService.getMediaFileArt(grandParent.getId());
+            // Check transient grandparent art first (set during directory scan, not yet persisted)
+            CoverArt art = grandParent.getArt();
+            if (art == null || CoverArt.NULL_ART.equals(art)) {
+                art = coverArtService.getMediaFileArt(grandParent.getId());
+            }
             if (!CoverArt.NULL_ART.equals(art)) {
                 artist.setArt(new CoverArt(-1, EntityType.ARTIST, art.getPath(), art.getFolder(), false));
                 LOG.debug("Artist {} has no art, using grandparent's art", artist.getId());

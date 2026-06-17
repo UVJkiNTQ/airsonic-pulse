@@ -376,25 +376,25 @@ class JaxbContentServiceTest {
         }
 
         @Test
-        void createJaxbAlbum_threeArgOverloadEmitsNoDiscTitlesAndDoesNotFetchSongs() {
-            // The 3-arg overload is the list-endpoint path. It must NOT trigger a per-album
-            // mediaFileService.getSongsForAlbum call — the firm N+1 constraint — and must
-            // emit no <discTitles> elements (no songs available to build them from).
+        void createJaxbAlbum_threeArgOverloadLoadsSongsForCoverArt() {
+            // The 3-arg overload now loads tracks to find cover art via media file entries
+            // (same approach as songs in createJaxbChild). It must emit discTitles when
+            // tracks have disc subtitles, and must call getSongsForAlbum.
             AlbumID3 jaxbAlbum = new AlbumID3();
             when(album.getId()).thenReturn(40);
             when(album.getName()).thenReturn("ListPath");
-            when(album.getArtist()).thenReturn(null);
-            when(album.getSongCount()).thenReturn(0);
+            when(album.getArtist()).thenReturn("TestArtist");
+            when(album.getSongCount()).thenReturn(1);
             when(album.getDuration()).thenReturn(0.0);
             when(album.getCreated()).thenReturn(null);
             when(coverArtService.getAlbumArt(40)).thenReturn(CoverArt.NULL_ART);
             when(albumService.getAlbumStarredDate(40, "user")).thenReturn(null);
+            when(mediaFileService.getSongsForAlbum("TestArtist", "ListPath")).thenReturn(List.of());
 
             AlbumID3 result = service.createJaxbAlbum(jaxbAlbum, album, "user");
 
             assertTrue(result.getDiscTitles().isEmpty());
-            verify(mediaFileService, never()).getSongsForAlbum(org.mockito.ArgumentMatchers.any(),
-                    org.mockito.ArgumentMatchers.any());
+            verify(mediaFileService).getSongsForAlbum("TestArtist", "ListPath");
         }
 
         @Test

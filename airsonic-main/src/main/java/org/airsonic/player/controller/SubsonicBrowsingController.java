@@ -167,7 +167,9 @@ public class SubsonicBrowsingController extends AbstractSubsonicController {
         Player player = playerService.getPlayer(request, response, username);
 
         for (MediaFile singleSong : musicFolderContent.singleSongs()) {
-            indexes.getChild().add(jaxbContentService.createJaxbChild(player, singleSong, username));
+            if (mediaFileService.showMediaFile(singleSong)) {
+                indexes.getChild().add(jaxbContentService.createJaxbChild(player, singleSong, username));
+            }
         }
 
         res.setIndexes(indexes);
@@ -350,7 +352,9 @@ public class SubsonicBrowsingController extends AbstractSubsonicController {
 
         Songs result = new Songs();
         for (MediaFile mediaFile : searchService.getRandomSongs(criteria)) {
-            result.getSong().add(jaxbContentService.createJaxbChild(player, mediaFile, username));
+            if (mediaFileService.showMediaFile(mediaFile)) {
+                result.getSong().add(jaxbContentService.createJaxbChild(player, mediaFile, username));
+            }
         }
         Response res = createResponse();
         res.setRandomSongs(result);

@@ -405,7 +405,8 @@ public class MediaFileService {
         if (CollectionUtils.isEmpty(folders)) {
             return Collections.emptyList();
         }
-        return mediaFileRepository.findByFolderInAndMediaTypeInAndPresentTrue(folders, MediaType.playableTypes(), new OffsetBasedPageRequest(offset, count, Sort.by("id")));
+        return mediaFileRepository.findByFolderInAndMediaTypeInAndPresentTrue(folders, MediaType.playableTypes(), new OffsetBasedPageRequest(offset, count, Sort.by("id")))
+                .stream().filter(this::showMediaFile).toList();
     }
 
     /**
@@ -416,7 +417,8 @@ public class MediaFileService {
      * @return All songs in the album.
      */
     public List<MediaFile> getSongsForAlbum(String artist, String album) {
-        return mediaFileRepository.findByAlbumArtistAndAlbumNameAndMediaTypeInAndPresentTrue(artist, album, MediaType.audioTypes(), Sort.by("discNumber", "trackNumber"));
+        return mediaFileRepository.findByAlbumArtistAndAlbumNameAndMediaTypeInAndPresentTrue(artist, album, MediaType.audioTypes(), Sort.by("discNumber", "trackNumber"))
+                .stream().filter(this::showMediaFile).toList();
     }
 
     /**
@@ -432,7 +434,8 @@ public class MediaFileService {
         if (CollectionUtils.isEmpty(musicFolders)) {
             return Collections.emptyList();
         }
-        return mediaFileRepository.findByFolderInAndMediaTypeInAndGenreAndPresentTrue(musicFolders, MediaType.audioTypes(), genre, new OffsetBasedPageRequest(offset, count, Sort.by("id")));
+        return mediaFileRepository.findByFolderInAndMediaTypeInAndGenreAndPresentTrue(musicFolders, MediaType.audioTypes(), genre, new OffsetBasedPageRequest(offset, count, Sort.by("id")))
+                .stream().filter(this::showMediaFile).toList();
     }
 
     /**
@@ -444,7 +447,8 @@ public class MediaFileService {
      * @return Songs by the artist.
      */
     public List<MediaFile> getSongsByArtist(int offset, int count, String artist) {
-        return mediaFileRepository.findByMediaTypeInAndArtistAndPresentTrue(MediaType.audioTypes(), artist, new OffsetBasedPageRequest(offset, count, Sort.by("id")));
+        return mediaFileRepository.findByMediaTypeInAndArtistAndPresentTrue(MediaType.audioTypes(), artist, new OffsetBasedPageRequest(offset, count, Sort.by("id")))
+                .stream().filter(this::showMediaFile).toList();
     }
 
     /**

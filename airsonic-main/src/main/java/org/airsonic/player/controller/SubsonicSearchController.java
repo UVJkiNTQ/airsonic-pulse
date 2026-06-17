@@ -102,7 +102,9 @@ public class SubsonicSearchController extends AbstractSubsonicController {
         searchResult.setTotalHits(result.getTotalHits());
 
         for (MediaFile mediaFile : result.getMediaFiles()) {
-            searchResult.getMatch().add(jaxbContentService.createJaxbChild(player, mediaFile, username));
+            if (mediaFileService.showMediaFile(mediaFile)) {
+                searchResult.getMatch().add(jaxbContentService.createJaxbChild(player, mediaFile, username));
+            }
         }
         Response res = createResponse();
         res.setSearchResult(searchResult);
@@ -140,7 +142,9 @@ public class SubsonicSearchController extends AbstractSubsonicController {
         criteria.setOffset(getIntParameter(request, "songOffset", 0));
         org.airsonic.player.domain.SearchResult songs = searchService.search(criteria, musicFolders, IndexType.SONG);
         for (MediaFile mediaFile : songs.getMediaFiles()) {
-            searchResult.getSong().add(jaxbContentService.createJaxbChild(player, mediaFile, username));
+            if (mediaFileService.showMediaFile(mediaFile)) {
+                searchResult.getSong().add(jaxbContentService.createJaxbChild(player, mediaFile, username));
+            }
         }
 
         Response res = createResponse();
@@ -198,7 +202,9 @@ public class SubsonicSearchController extends AbstractSubsonicController {
             criteria.setOffset(songOffset);
             result = searchService.search(criteria, musicFolders, IndexType.SONG);
             for (MediaFile song : result.getMediaFiles()) {
-                searchResult.getSong().add(jaxbContentService.createJaxbChild(player, song, username));
+                if (mediaFileService.showMediaFile(song)) {
+                    searchResult.getSong().add(jaxbContentService.createJaxbChild(player, song, username));
+                }
             }
         }
 

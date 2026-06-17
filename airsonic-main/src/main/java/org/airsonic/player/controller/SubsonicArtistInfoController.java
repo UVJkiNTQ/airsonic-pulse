@@ -91,7 +91,9 @@ public class SubsonicArtistInfoController extends AbstractSubsonicController {
         List<MediaFile> similarSongs = lastFmService.getSimilarSongsByMediaFile(mediaFile, count, musicFolders);
         Player player = playerService.getPlayer(request, response, username);
         for (MediaFile similarSong : similarSongs) {
-            result.getSong().add(jaxbContentService.createJaxbChild(player, similarSong, username));
+            if (mediaFileService.showMediaFile(similarSong)) {
+                result.getSong().add(jaxbContentService.createJaxbChild(player, similarSong, username));
+            }
         }
 
         Response res = createResponse();
@@ -119,7 +121,9 @@ public class SubsonicArtistInfoController extends AbstractSubsonicController {
         List<MediaFile> similarSongs = lastFmService.getSimilarSongs(artist, count, musicFolders);
         Player player = playerService.getPlayer(request, response, username);
         for (MediaFile similarSong : similarSongs) {
-            result.getSong().add(jaxbContentService.createJaxbChild(player, similarSong, username));
+            if (mediaFileService.showMediaFile(similarSong)) {
+                result.getSong().add(jaxbContentService.createJaxbChild(player, similarSong, username));
+            }
         }
 
         Response res = createResponse();
@@ -141,7 +145,9 @@ public class SubsonicArtistInfoController extends AbstractSubsonicController {
         List<MediaFile> topSongs = lastFmService.getTopSongs(artist, count, musicFolders);
         Player player = playerService.getPlayer(request, response, username);
         for (MediaFile topSong : topSongs) {
-            result.getSong().add(jaxbContentService.createJaxbChild(player, topSong, username));
+            if (mediaFileService.showMediaFile(topSong)) {
+                result.getSong().add(jaxbContentService.createJaxbChild(player, topSong, username));
+            }
         }
 
         Response res = createResponse();

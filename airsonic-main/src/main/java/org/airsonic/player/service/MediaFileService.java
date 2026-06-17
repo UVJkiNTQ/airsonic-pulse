@@ -830,19 +830,29 @@ public class MediaFileService {
 
         // cue tracks
         if (isEnableCueIndexing) {
-            List<MediaFile> indexedTracks = cueSheets.entrySet().parallelStream().flatMap(e -> {
+            // Separate external .cue files from embedded .flac cue sheets so that
+            // external CUE sheets take priority. When a .flac file has an embedded
+            // CUE and an external .cue file also exists for the same base audio,
+            // the external .cue should be used and the embedded CUE silently ignored.
+            Map<String, CueSheet> externalCueSheets = new ConcurrentHashMap<>();
+            Map<String, CueSheet> embeddedCueSheets = new ConcurrentHashMap<>();
+            cueSheets.forEach((indexPath, cueSheet) -> {
+                if (FilenameUtils.getExtension(indexPath).equalsIgnoreCase("cue")) {
+                    externalCueSheets.put(indexPath, cueSheet);
+                } else {
+                    embeddedCueSheets.put(indexPath, cueSheet);
+                }
+            });
+
+            // Process external .cue files first.
+            List<MediaFile> indexedTracks = externalCueSheets.entrySet().parallelStream().flatMap(e -> {
                 String indexPath = e.getKey();
                 CueSheet cueSheet = e.getValue();
 
                 String filePath = cueSheet.getFileData().get(0).getFile();
                 MediaFile base = bareFiles.get(FilenameUtils.getName(filePath));
-                // Immediately remove to maintain original single-consumer semantics.
-                // If another cue sheet already consumed this base file, get() will
-                // still return it (shared base scenario) but remove() returns null.
                 boolean isFirstConsumer = bareFiles.remove(FilenameUtils.getName(filePath)) != null;
 
-                // If not found as a direct sibling, try resolving a subdirectory
-                // path in the FILE directive relative to the cue file's directory.
                 if (base == null && filePath.contains("/")) {
                     Path resolvedAudio = parent.getFullPath().resolve(filePath).normalize();
                     if (Files.exists(resolvedAudio) && includeMediaFileByPath(resolvedAudio)) {
@@ -857,14 +867,13 @@ public class MediaFileService {
 
                 if (Objects.nonNull(base)) {
                     if (isFirstConsumer) {
-                        base.setIndexPath(indexPath); // update indexPath in mediaFile
+                        base.setIndexPath(indexPath);
                         Instant mediaChanged = FileUtil.lastModified(base.getFullPath());
                         Instant cueChanged = FileUtil.lastModified(base.getFullIndexPath());
                         base.setChanged(mediaChanged.compareTo(cueChanged) >= 0 ? mediaChanged : cueChanged);
                         updateMediaFile(base);
                     }
                     List<MediaFile> tracks = createIndexedTracks(base, cueSheet);
-                    // remove stored children that are now indexed
                     tracks.forEach(t -> storedChildrenMap.remove(Pair.of(t.getPath(), t.getStartPosition())));
                     if (isFirstConsumer) {
                         tracks.add(base);
@@ -874,7 +883,53 @@ public class MediaFileService {
                     LOG.warn("Could not find base file '{}' for cue sheet {}", filePath, indexPath);
                     return Stream.empty();
                 }
-            }).toList();
+            }).collect(Collectors.toList());
+
+            // Process embedded .flac cue sheets second. Silently skip any whose
+            // base file was already consumed by an external .cue file.
+            List<MediaFile> embeddedTracks = embeddedCueSheets.entrySet().parallelStream().flatMap(e -> {
+                String indexPath = e.getKey();
+                CueSheet cueSheet = e.getValue();
+
+                String filePath = cueSheet.getFileData().get(0).getFile();
+                MediaFile base = bareFiles.get(FilenameUtils.getName(filePath));
+                boolean isFirstConsumer = bareFiles.remove(FilenameUtils.getName(filePath)) != null;
+
+                if (base == null && filePath.contains("/")) {
+                    Path resolvedAudio = parent.getFullPath().resolve(filePath).normalize();
+                    if (Files.exists(resolvedAudio) && includeMediaFileByPath(resolvedAudio)) {
+                        Path relativeToFolder = folder.getPath().relativize(resolvedAudio);
+                        base = createMediaFileByFile(relativeToFolder, folder);
+                        if (base != null) {
+                            updateMediaFile(base);
+                            isFirstConsumer = true;
+                        }
+                    }
+                }
+
+                if (Objects.nonNull(base)) {
+                    if (isFirstConsumer) {
+                        base.setIndexPath(indexPath);
+                        Instant mediaChanged = FileUtil.lastModified(base.getFullPath());
+                        Instant cueChanged = FileUtil.lastModified(base.getFullIndexPath());
+                        base.setChanged(mediaChanged.compareTo(cueChanged) >= 0 ? mediaChanged : cueChanged);
+                        updateMediaFile(base);
+                    }
+                    List<MediaFile> tracks = createIndexedTracks(base, cueSheet);
+                    tracks.forEach(t -> storedChildrenMap.remove(Pair.of(t.getPath(), t.getStartPosition())));
+                    if (isFirstConsumer) {
+                        tracks.add(base);
+                    }
+                    return tracks.stream();
+                } else {
+                    // Embedded cue was superseded by an external .cue file — this is
+                    // expected and not a problem.
+                    LOG.debug("Base file '{}' for embedded cue sheet {} already consumed by external cue", filePath, indexPath);
+                    return Stream.empty();
+                }
+            }).collect(Collectors.toList());
+
+            indexedTracks.addAll(embeddedTracks);
             result.addAll(indexedTracks);
         }
 

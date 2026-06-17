@@ -117,6 +117,16 @@ public class MediaScannerServiceTestCase {
         jdbcTemplate.execute("DELETE FROM media_file");
         jdbcTemplate.execute("DELETE FROM album");
         jdbcTemplate.execute("DELETE FROM artist");
+        // Defensive sweep against leaked music_folder rows from earlier test classes whose
+        // @AfterEach failed to delete by the JPA-assigned ID. The shared MEDIAS/Music and
+        // MEDIAS/Music2 paths conflict with idx_music_folder_path on matrix DBs (Postgres,
+        // MariaDB) and crash the saveAll below as DataIntegrityViolation; HSQLDB tolerates
+        // the residue. The wider multi-offender cleanup antipattern is tracked in #266.
+        Path baseMediaPath = MusicFolderTestData.resolveBaseMediaPath();
+        musicFolderRepository.deleteAll(
+            musicFolderRepository.findAll().stream()
+                .filter(f -> f.getPath().startsWith(baseMediaPath))
+                .toList());
         TestCaseUtils.waitForScanFinish(mediaScannerService);
         mediaFolderService.clearMusicFolderCache();
         mediaFolderService.clearMediaFileCache();
@@ -456,7 +466,14 @@ public class MediaScannerServiceTestCase {
         MediaFile file = new MediaFile();
         file.setMediaType(MediaFile.MediaType.ALBUM);
         file.setGenre(genre);
-        // genres[] is intentionally not set — album folders never get the packed column populated.
+        // genres[] left null to model pre-#255 legacy rows (or un-rescanned rows after upgrade).
+        // Post-#255 newly-scanned album folders write the packed column too — see overload below.
+        return file;
+    }
+
+    private MediaFile albumFolder(String genre, String packedGenres) {
+        MediaFile file = albumFolder(genre);
+        file.setGenres(packedGenres);
         return file;
     }
 
@@ -551,6 +568,31 @@ public class MediaScannerServiceTestCase {
         org.airsonic.player.domain.Genres g = invokeUpdateGenres(file, ";");
         assertEquals(1, albumCountOf(g, "Rock"));
         assertEquals(1, albumCountOf(g, "Metal"));
+        assertEquals(2, g.getGenres().size());
+    }
+
+    @Test
+    public void testUpdateGenresMultiFramePackedAlbumFolderCountsAllAsAlbumCount() {
+        // Post-#255 album folders carry the packed column; the feeder must increment every
+        // album_count row in the packed value, mirroring the multi-frame audio file behaviour.
+        MediaFile file = albumFolder("Rock", "Rock;Pop;Indie");
+        org.airsonic.player.domain.Genres g = invokeUpdateGenres(file, ";");
+        assertEquals(1, albumCountOf(g, "Rock"));
+        assertEquals(1, albumCountOf(g, "Pop"));
+        assertEquals(1, albumCountOf(g, "Indie"));
+        assertEquals(0, songCountOf(g, "Rock"));
+        assertEquals(3, g.getGenres().size());
+    }
+
+    @Test
+    public void testUpdateGenresPackedAlbumFolderPrefersPackedOverScalar() {
+        // When both packed and scalar are present, packed wins — same precedence as audio files.
+        // Scalar carries only "Rock" but packed carries "Rock;Pop"; the feeder should produce
+        // album_count rows for both, proving the scalar is ignored when packed is non-null.
+        MediaFile file = albumFolder("Rock", "Rock;Pop");
+        org.airsonic.player.domain.Genres g = invokeUpdateGenres(file, ";");
+        assertEquals(1, albumCountOf(g, "Rock"));
+        assertEquals(1, albumCountOf(g, "Pop"));
         assertEquals(2, g.getGenres().size());
     }
 

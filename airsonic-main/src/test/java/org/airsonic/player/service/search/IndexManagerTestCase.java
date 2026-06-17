@@ -94,7 +94,23 @@ public class IndexManagerTestCase {
     public void beforeEach() {
         mediaFolderService.clearMusicFolderCache();
         mediaFolderService.clearMediaFileCache();
+        // Sweep present=false Artist/Album orphans left behind by earlier test classes whose
+        // @AfterEach deletes their music folder but not the Artist/Album rows the scan created.
+        // testExpunge's zero-state pre-assertions at lines 189 and 208 require this — HSQLDB
+        // tolerates the residue (in-memory + fresh per run), Postgres/MariaDB do not. The
+        // underlying multi-offender cleanup antipattern is tracked separately as a hygiene
+        // audit; this sweep keeps testExpunge robust under any suite ordering.
+        artistRepository.deleteAll(artistRepository.findByPresentFalse());
+        albumRepository.deleteAll(albumRepository.findByPresentFalse());
+        // Defensive sweep against leaked music_folder rows on the MEDIAS/Music path from
+        // earlier test classes whose @AfterEach failed to delete by the JPA-assigned ID.
+        // Same matrix-DB failure mode as the Artist/Album sweep above (duplicate-key under
+        // idx_music_folder_path); HSQLDB tolerates the residue.
         Path musicDir = MusicFolderTestData.resolveMusicFolderPath();
+        musicFolderRepository.deleteAll(
+            musicFolderRepository.findAll().stream()
+                .filter(f -> f.getPath().equals(musicDir))
+                .toList());
         MusicFolder folder = new MusicFolder(musicDir, "Music", Type.MEDIA, true, Instant.now().truncatedTo(ChronoUnit.MICROS));
         musicFolders.add(folder);
         musicFolderRepository.saveAndFlush(folder);

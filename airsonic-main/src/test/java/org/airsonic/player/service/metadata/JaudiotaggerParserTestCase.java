@@ -18,8 +18,11 @@ package org.airsonic.player.service.metadata;
 
 import org.airsonic.player.domain.Contributor;
 import org.jaudiotagger.tag.FieldKey;
+import org.jaudiotagger.tag.id3.ID3v23Frame;
+import org.jaudiotagger.tag.id3.ID3v23Tag;
 import org.jaudiotagger.tag.id3.ID3v24Frame;
 import org.jaudiotagger.tag.id3.ID3v24Tag;
+import org.jaudiotagger.tag.id3.framebody.FrameBodyIPLS;
 import org.jaudiotagger.tag.id3.framebody.FrameBodyTMCL;
 import org.jaudiotagger.tag.id3.framebody.FrameBodyTXXX;
 import org.jaudiotagger.tag.id3.valuepair.TextEncoding;
@@ -319,6 +322,204 @@ public class JaudiotaggerParserTestCase {
                 new Contributor("performer", "Guitar", "Eric Clapton"),
                 new Contributor("performer", "Bass", "Jack Bruce"),
                 new Contributor("performer", "Drums", "Ginger Baker")),
+                JaudiotaggerParser.getContributors(tag));
+    }
+
+    // ----------------------------------------------------------------------------------------
+    // MP4 per-instrument freeform performer atoms (fixes #232). Picard convention writes one
+    // atom per instrument under ----:com.apple.iTunes:PERFORMER:<instrument>; the standard
+    // ----:com.apple.iTunes:Performer atom (Vorbis-style "Name (Instrument)" values) is read
+    // via the existing FieldKey.PERFORMER fall-through and the two must coexist without
+    // clobbering or double-counting.
+    // ----------------------------------------------------------------------------------------
+
+    private static Mp4Tag tagWithMp4PerformerAtoms(String... pairs) {
+        if (pairs.length % 2 != 0) {
+            throw new IllegalArgumentException("pairs must be (instrument, name)+");
+        }
+        Mp4Tag tag = new Mp4Tag();
+        for (int i = 0; i < pairs.length; i += 2) {
+            String descriptor = "PERFORMER:" + pairs[i];
+            String atomId = "----:com.apple.iTunes:" + descriptor;
+            tag.addField(new Mp4TagReverseDnsField(atomId, "com.apple.iTunes", descriptor, pairs[i + 1]));
+        }
+        return tag;
+    }
+
+    @Test
+    public void testGetContributorsExtractsPerformersFromMp4FreeformAtoms() {
+        Mp4Tag tag = tagWithMp4PerformerAtoms("Guitar", "Jimi Hendrix", "Bass", "Noel Redding");
+        assertEquals(List.of(
+                new Contributor("performer", "Guitar", "Jimi Hendrix"),
+                new Contributor("performer", "Bass", "Noel Redding")),
+                JaudiotaggerParser.getContributors(tag));
+    }
+
+    @Test
+    public void testGetContributorsSplitsCommaDelimitedMp4PerformersForOneInstrument() {
+        // Mirror the ID3v2.4 TMCL semantics: a single atom value may carry a comma-delimited
+        // list of performers, all sharing the same instrument descriptor.
+        Mp4Tag tag = tagWithMp4PerformerAtoms("Vocals", "John Lennon, Paul McCartney");
+        assertEquals(List.of(
+                new Contributor("performer", "Vocals", "John Lennon"),
+                new Contributor("performer", "Vocals", "Paul McCartney")),
+                JaudiotaggerParser.getContributors(tag));
+    }
+
+    @Test
+    public void testGetContributorsMp4FreeformCoexistsWithStandardPerformerAtom() throws Exception {
+        // Per-instrument freeform atoms emit first (in iteration order from the MP4 branch);
+        // the standard ----:com.apple.iTunes:Performer atom (mapped from FieldKey.PERFORMER)
+        // follows via the fall-through and is parsed with the Vorbis "Name (Instrument)"
+        // convention. Both contribute; nothing double-counts.
+        Mp4Tag tag = tagWithMp4PerformerAtoms("Guitar", "Jimi Hendrix");
+        tag.setField(FieldKey.PERFORMER, "Eric Clapton (Guitar)");
+        assertEquals(List.of(
+                new Contributor("performer", "Guitar", "Jimi Hendrix"),
+                new Contributor("performer", "Guitar", "Eric Clapton")),
+                JaudiotaggerParser.getContributors(tag));
+    }
+
+    @Test
+    public void testGetContributorsMp4WithoutFreeformPerformerAtomsEmitsViaFallThrough() throws Exception {
+        // Regression guard: an MP4 tag with only the standard Performer atom (no per-instrument
+        // freeform atoms) still works via the fall-through to the Vorbis-style FieldKey loop.
+        Mp4Tag tag = new Mp4Tag();
+        tag.setField(FieldKey.PERFORMER, "Eric Clapton (Guitar)");
+        assertEquals(List.of(new Contributor("performer", "Guitar", "Eric Clapton")),
+                JaudiotaggerParser.getContributors(tag));
+    }
+
+    @Test
+    public void testGetContributorsMp4FreeformPerformerAlongsideCleanFieldKeys() throws Exception {
+        // Clean-FieldKey roles emit first (CONTRIBUTOR_ROLES order), MP4 per-instrument
+        // freeform performers follow via addPerformers — canonical order preserved.
+        Mp4Tag tag = tagWithMp4PerformerAtoms("Guitar", "Eric Clapton");
+        tag.setField(FieldKey.COMPOSER, "George Harrison");
+        assertEquals(List.of(
+                new Contributor("composer", null, "George Harrison"),
+                new Contributor("performer", "Guitar", "Eric Clapton")),
+                JaudiotaggerParser.getContributors(tag));
+    }
+
+    // ----------------------------------------------------------------------------------------
+    // ID3v2.3 IPLS frame (fixes #231). v2.3 has no TMCL/TIPL split — IPLS combines instrument
+    // credits (instrument -> performer) and function credits (producer/mixer/... -> name) in one
+    // paired list. The probe in the PR confirmed jaudiotagger surfaces NONE of this through the
+    // FieldKey accessors, so getContributors must extract both categories from the frame here,
+    // classifying each pair's key against the canonical function vocabulary.
+    // ----------------------------------------------------------------------------------------
+
+    private static ID3v23Tag tagWithIpls(String... pairs) {
+        if (pairs.length % 2 != 0) {
+            throw new IllegalArgumentException("pairs must be (key, name)+");
+        }
+        ID3v23Tag tag = new ID3v23Tag();
+        FrameBodyIPLS body = new FrameBodyIPLS();
+        for (int i = 0; i < pairs.length; i += 2) {
+            body.addPair(pairs[i], pairs[i + 1]);
+        }
+        ID3v23Frame frame = new ID3v23Frame("IPLS");
+        frame.setBody(body);
+        tag.addFrame(frame);
+        return tag;
+    }
+
+    @Test
+    public void testGetContributorsExtractsInstrumentPerformerFromIpls() {
+        ID3v23Tag tag = tagWithIpls("Guitar", "Jimi Hendrix");
+        assertEquals(List.of(new Contributor("performer", "Guitar", "Jimi Hendrix")),
+                JaudiotaggerParser.getContributors(tag));
+    }
+
+    @Test
+    public void testGetContributorsExtractsMultipleInstrumentsFromIpls() {
+        ID3v23Tag tag = tagWithIpls("Guitar", "Jimi Hendrix", "Bass", "Noel Redding");
+        assertEquals(List.of(
+                new Contributor("performer", "Guitar", "Jimi Hendrix"),
+                new Contributor("performer", "Bass", "Noel Redding")),
+                JaudiotaggerParser.getContributors(tag));
+    }
+
+    @Test
+    public void testGetContributorsSplitsCommaDelimitedIplsPerformers() {
+        // Mirrors the TMCL comma-split: a single IPLS value may list multiple performers all
+        // sharing one instrument key.
+        ID3v23Tag tag = tagWithIpls("Vocals", "John Lennon, Paul McCartney");
+        assertEquals(List.of(
+                new Contributor("performer", "Vocals", "John Lennon"),
+                new Contributor("performer", "Vocals", "Paul McCartney")),
+                JaudiotaggerParser.getContributors(tag));
+    }
+
+    @Test
+    public void testGetContributorsRoutesIplsFunctionKeyToCanonicalRole() {
+        // A function key (one of the canonical CONTRIBUTOR_ROLES labels) becomes a Contributor
+        // with that role and no subRole — not a performer credit.
+        ID3v23Tag tag = tagWithIpls("producer", "George Martin");
+        assertEquals(List.of(new Contributor("producer", null, "George Martin")),
+                JaudiotaggerParser.getContributors(tag));
+    }
+
+    @Test
+    public void testGetContributorsIplsFunctionKeyIsCaseInsensitive() {
+        // Taggers choose the IPLS key casing freely; classification lowercases for lookup so
+        // "PRODUCER", "Producer", "producer" all route to role "producer".
+        assertEquals(List.of(new Contributor("producer", null, "George Martin")),
+                JaudiotaggerParser.getContributors(tagWithIpls("PRODUCER", "George Martin")));
+        assertEquals(List.of(new Contributor("producer", null, "George Martin")),
+                JaudiotaggerParser.getContributors(tagWithIpls("Producer", "George Martin")));
+    }
+
+    @Test
+    public void testGetContributorsIplsMixesInstrumentAndFunctionPairsInOrder() {
+        // Both categories in one IPLS frame, emitted in iteration order, each classified
+        // independently.
+        ID3v23Tag tag = tagWithIpls(
+                "Guitar", "Jimi Hendrix",
+                "producer", "George Martin",
+                "Bass", "Noel Redding",
+                "mixer", "Andy Wallace");
+        assertEquals(List.of(
+                new Contributor("performer", "Guitar", "Jimi Hendrix"),
+                new Contributor("producer", null, "George Martin"),
+                new Contributor("performer", "Bass", "Noel Redding"),
+                new Contributor("mixer", null, "Andy Wallace")),
+                JaudiotaggerParser.getContributors(tag));
+    }
+
+    @Test
+    public void testGetContributorsIplsUnknownKeyBecomesPerformerWithKeyAsSubRole() {
+        // Pattern-based default: a key that is neither a known function nor an obvious instrument
+        // is still recovered as a performer credit carrying the original key (verbatim) as the
+        // subRole — recovering the credit rather than silently dropping it.
+        ID3v23Tag tag = tagWithIpls("backing tracks", "Studio Crew");
+        assertEquals(List.of(new Contributor("performer", "backing tracks", "Studio Crew")),
+                JaudiotaggerParser.getContributors(tag));
+    }
+
+    @Test
+    public void testGetContributorsId3v23WithoutIplsEmitsNoPerformers() {
+        // Bare v2.3 tag with only a clean FieldKey role: the clean-FieldKey loop emits it; the
+        // IPLS branch is a no-op (no frame) and contributes nothing spurious.
+        ID3v23Tag tag = new ID3v23Tag();
+        try {
+            tag.setField(FieldKey.COMPOSER, "John Williams");
+        } catch (Exception x) {
+            throw new AssertionError(x);
+        }
+        assertEquals(List.of(new Contributor("composer", null, "John Williams")),
+                JaudiotaggerParser.getContributors(tag));
+    }
+
+    @Test
+    public void testGetContributorsV24TmclStillWorksAlongsideIplsBranch() {
+        // Regression guard: adding the IPLS branch must not disturb the v2.4 TMCL path. A v2.4
+        // tag has no IPLS frame, so only the TMCL performers emit.
+        ID3v24Tag tag = tagWithTmcl("Guitar", "Jimi Hendrix", "Bass", "Noel Redding");
+        assertEquals(List.of(
+                new Contributor("performer", "Guitar", "Jimi Hendrix"),
+                new Contributor("performer", "Bass", "Noel Redding")),
                 JaudiotaggerParser.getContributors(tag));
     }
 }

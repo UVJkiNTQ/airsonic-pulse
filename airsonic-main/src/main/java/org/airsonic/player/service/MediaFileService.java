@@ -1163,6 +1163,7 @@ public class MediaFileService {
                             mediaFile.setAlbumName(metaData.getAlbumName());
                             mediaFile.setYear(metaData.getYear());
                             mediaFile.setGenre(metaData.getGenre());
+                            mediaFile.setGenres(packGenres(metaData.getGenres()));
                         }
                     } else {
                         mediaFile.setArtist(truncate(file.getFileName().toString(), MAX_VARCHAR_LENGTH));

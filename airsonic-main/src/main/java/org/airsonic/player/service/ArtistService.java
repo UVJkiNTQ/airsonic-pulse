@@ -222,6 +222,19 @@ public class ArtistService {
     }
 
     /**
+     * Mark artists that are not present only within specified folders
+     *
+     * @param folderIds folder IDs to restrict the mark to
+     * @param lastScanned last scanned date
+     */
+    @Transactional
+    public void markNonPresent(List<Integer> folderIds, Instant lastScanned) {
+        if (artistRepository.existsByFolderIdInAndLastScannedBeforeAndPresentTrue(folderIds, lastScanned)) {
+            artistRepository.markNonPresentByFolderIds(folderIds, lastScanned);
+        }
+    }
+
+    /**
      * Save artist.
      * <p>
      * If the artist has no ID (new entity), first checks whether an artist with

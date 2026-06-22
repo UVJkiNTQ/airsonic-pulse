@@ -144,4 +144,9 @@ public interface MediaFileRepository extends JpaRepository<MediaFile, Integer> {
     @Query("UPDATE MediaFile m SET m.present = false, m.childrenLastUpdated = :childrenLastUpdated WHERE m.lastScanned < :lastScanned")
     public void markNonPresent(@Param("childrenLastUpdated") Instant childrenLastUpdated, @Param("lastScanned") Instant lastScanned);
 
+    @Modifying
+    @Transactional
+    @Query("UPDATE MediaFile m SET m.present = false, m.childrenLastUpdated = :childrenLastUpdated WHERE m.folder.id IN :folderIds AND m.lastScanned < :lastScanned")
+    public void markNonPresentByFolderIds(@Param("folderIds") List<Integer> folderIds, @Param("childrenLastUpdated") Instant childrenLastUpdated, @Param("lastScanned") Instant lastScanned);
+
 }

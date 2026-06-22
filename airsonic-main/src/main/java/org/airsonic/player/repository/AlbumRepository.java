@@ -55,4 +55,11 @@ public interface AlbumRepository extends JpaRepository<Album, Integer> {
     @Query("UPDATE Album a SET a.present = false WHERE a.lastScanned < :lastScanned")
     public void markNonPresent(@Param("lastScanned") Instant lastScanned);
 
+    public boolean existsByFolderIdInAndLastScannedBeforeAndPresentTrue(@Param("folderIds") List<Integer> folderIds, @Param("lastScanned") Instant lastScanned);
+
+    @Transactional
+    @Modifying
+    @Query("UPDATE Album a SET a.present = false WHERE a.folder.id IN :folderIds AND a.lastScanned < :lastScanned")
+    public void markNonPresentByFolderIds(@Param("folderIds") List<Integer> folderIds, @Param("lastScanned") Instant lastScanned);
+
 }

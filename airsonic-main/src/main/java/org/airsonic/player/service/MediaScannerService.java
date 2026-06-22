@@ -281,6 +281,17 @@ public class MediaScannerService {
         LOG.info("Starting to scan media library.");
         LOG.debug("New last scan date is {}", statistics.getScanDate());
 
+        // Determine if we are scanning all folders or a subset.
+        // When scanning only specific folders, we must restrict markNonPresent
+        // to those folders to avoid discarding records from other folders.
+        List<Integer> allFolderIds = mediaFolderService.getAllMusicFolders(false, true).stream()
+                .map(MusicFolder::getId).toList();
+        List<Integer> scannedFolderIds = foldersToScan.stream()
+                .map(MusicFolder::getId).toList();
+        boolean isPartialScan = !allFolderIds.equals(scannedFolderIds);
+        LOG.debug("Scanning {} of {} total folder(s). Partial scan: {}",
+                scannedFolderIds.size(), allFolderIds.size(), isPartialScan);
+
         Map<String, AtomicInteger> albumCount = new ConcurrentHashMap<>();
         Map<String, Artist> artists = new ConcurrentHashMap<>();
         Map<String, Album> albums = new ConcurrentHashMap<>();
@@ -331,7 +342,11 @@ public class MediaScannerService {
                             .toArray(CompletableFuture[]::new))
                     .thenRunAsync(() -> {
                         LOG.info("Marking non-present albums.");
-                        albumService.markNonPresent(statistics.getScanDate());
+                        if (isPartialScan) {
+                            albumService.markNonPresent(scannedFolderIds, statistics.getScanDate());
+                        } else {
+                            albumService.markNonPresent(statistics.getScanDate());
+                        }
                     }, pool)
                     .thenRunAsync(() -> LOG.info("Album persistence complete"), pool);
 
@@ -345,7 +360,11 @@ public class MediaScannerService {
                             .toArray(CompletableFuture[]::new))
                     .thenRunAsync(() -> {
                         LOG.info("Marking non-present artists.");
-                        artistService.markNonPresent(statistics.getScanDate());
+                        if (isPartialScan) {
+                            artistService.markNonPresent(scannedFolderIds, statistics.getScanDate());
+                        } else {
+                            artistService.markNonPresent(statistics.getScanDate());
+                        }
                     }, pool)
                     .thenRunAsync(() -> LOG.info("Artist persistence complete"), pool);
 
@@ -353,7 +372,11 @@ public class MediaScannerService {
             CompletableFuture<Void> mediaFilePersistence = CompletableFuture
                     .runAsync(() -> {
                         LOG.info("Marking non-present media files.");
-                        mediaFileService.markNonPresent(statistics.getScanDate());
+                        if (isPartialScan) {
+                            mediaFileService.markNonPresent(scannedFolderIds, statistics.getScanDate());
+                        } else {
+                            mediaFileService.markNonPresent(statistics.getScanDate());
+                        }
                     }, pool)
                     .thenRunAsync(() -> LOG.info("Media file persistence complete"), pool);
 

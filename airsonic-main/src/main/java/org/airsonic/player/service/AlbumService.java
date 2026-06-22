@@ -369,6 +369,19 @@ public class AlbumService {
     }
 
     /**
+     * mark albums as non present only within specified folders
+     *
+     * @param folderIds folder IDs to restrict the mark to
+     * @param lastScanned last scanned date
+     */
+    @Transactional
+    public void markNonPresent(List<Integer> folderIds, Instant lastScanned) {
+        if (albumRepository.existsByFolderIdInAndLastScannedBeforeAndPresentTrue(folderIds, lastScanned)) {
+            albumRepository.markNonPresentByFolderIds(folderIds, lastScanned);
+        }
+    }
+
+    /**
      * Save album to database.
      * <p>
      * If the album has no ID (new entity), first checks whether an album with the

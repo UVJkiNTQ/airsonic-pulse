@@ -1801,6 +1801,16 @@ public class MediaFileService {
     }
 
     /**
+     * mark media files non present only within specified folders
+     * @param folderIds folder IDs to restrict the mark to
+     * @param lastScanned last scanned time before which media files are marked non present
+     */
+    @Transactional
+    public void markNonPresent(List<Integer> folderIds, Instant lastScanned) {
+        mediaFileRepository.markNonPresentByFolderIds(folderIds, Instant.ofEpochMilli(1), lastScanned);
+    }
+
+    /**
      * soft delete media file
      *
      * @param file media file to delete

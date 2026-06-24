@@ -23,6 +23,7 @@ package org.airsonic.player.service;
 import org.airsonic.player.config.AirsonicScanConfig;
 import org.airsonic.player.domain.*;
 import org.airsonic.player.domain.CoverArt.EntityType;
+import org.airsonic.player.repository.*;
 import org.airsonic.player.service.cache.ArtistByNameCache;
 import org.airsonic.player.service.search.IndexManager;
 import org.slf4j.Logger;
@@ -74,7 +75,10 @@ public class MediaScannerService {
         TaskSchedulingService taskService,
         SimpMessagingTemplate messagingTemplate,
         AirsonicScanConfig scanConfig,
-        ArtistByNameCache artistByNameCache
+        ArtistByNameCache artistByNameCache,
+        MediaFileRepository mediaFileRepository,
+        ArtistRepository artistRepository,
+        AlbumRepository albumRepository
     ) {
         this.settingsService = settingsService;
         this.indexManager = indexManager;
@@ -88,6 +92,9 @@ public class MediaScannerService {
         this.messagingTemplate = messagingTemplate;
         this.scanConfig = scanConfig;
         this.artistByNameCache = artistByNameCache;
+        this.mediaFileRepository = mediaFileRepository;
+        this.artistRepository = artistRepository;
+        this.albumRepository = albumRepository;
         init();
     }
 
@@ -103,6 +110,9 @@ public class MediaScannerService {
     private final SimpMessagingTemplate messagingTemplate;
     private final AirsonicScanConfig scanConfig;
     private final ArtistByNameCache artistByNameCache;
+    private final MediaFileRepository mediaFileRepository;
+    private final ArtistRepository artistRepository;
+    private final AlbumRepository albumRepository;
 
     private int scannerParallelism;
     private AtomicInteger scanCount = new AtomicInteger(0);
@@ -241,6 +251,12 @@ public class MediaScannerService {
             return;
         }
 
+        // Determine if this is a partial scan (only a subset of folders)
+        List<Integer> allFolderIds = mediaFolderService.getAllMusicFolders(false, true).stream()
+                .map(MusicFolder::getId).toList();
+        List<Integer> scannedIds = foldersToScan.stream().map(MusicFolder::getId).toList();
+        boolean isPartialScan = !allFolderIds.equals(scannedIds);
+
         LOG.info("Starting media library scan for {} folder(s) with timeout {} seconds.", foldersToScan.size(), timeoutSeconds);
         CompletableFuture.runAsync(() -> {
             doScanLibrary(pool, statistics, foldersToScan);
@@ -258,6 +274,11 @@ public class MediaScannerService {
                 })
                 .thenRunAsync(() -> playlistFileService.importPlaylists(), pool)
                 .whenComplete((r,e) -> {
+                    // For partial scans, recompute global statistics from the database
+                    // to avoid overwriting totals with only the scanned folders' counts.
+                    if (isPartialScan) {
+                        refreshGlobalStatistics(statistics);
+                    }
                     indexManager.stopIndexing(statistics);
                     LOG.info("Indexing complete.");
                     setScanning(false);
@@ -275,6 +296,38 @@ public class MediaScannerService {
             return settingsTimeout;
         }
         return isFullScan ? scanConfig.getFullTimeout() : scanConfig.getTimeout();
+    }
+
+    /**
+     * Recompute media library statistics from the database for ALL folders.
+     * Used after a partial scan to ensure the global statistics reflect the
+     * entire library, not just the scanned subset.
+     */
+    private void refreshGlobalStatistics(MediaLibraryStatistics statistics) {
+        LOG.debug("Refreshing global statistics from database after partial scan.");
+        try {
+            List<MusicFolder> allFolders = mediaFolderService.getAllMusicFolders(false, true);
+
+            int artistCount = artistRepository.countByFolderInAndPresentTrue(allFolders);
+            statistics.setArtistCount(artistCount);
+
+            int albumCount = albumRepository.countByFolderInAndPresentTrue(allFolders);
+            statistics.setAlbumCount(albumCount);
+
+            int songCount = mediaFileRepository.countByFolderInAndMediaTypeAndPresentTrue(allFolders, MediaFile.MediaType.MUSIC);
+            statistics.setSongCount(songCount);
+
+            long totalBytes = mediaFileRepository.sumFileSizeByFolderInAndMediaTypeAndPresentTrue(allFolders, MediaFile.MediaType.MUSIC);
+            statistics.setTotalLengthInBytes(totalBytes);
+
+            double totalDuration = mediaFileRepository.sumDurationByFolderInAndMediaTypeAndPresentTrue(allFolders, MediaFile.MediaType.MUSIC);
+            statistics.setTotalDurationInSeconds(totalDuration);
+
+            LOG.debug("Global statistics refreshed: {} artists, {} albums, {} songs, {} bytes, {}s duration",
+                    artistCount, albumCount, songCount, totalBytes, totalDuration);
+        } catch (Exception e) {
+            LOG.warn("Failed to refresh global statistics after partial scan.", e);
+        }
     }
 
     private void doScanLibrary(ForkJoinPool pool, MediaLibraryStatistics statistics, List<MusicFolder> foldersToScan) {

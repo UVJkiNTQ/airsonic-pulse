@@ -149,4 +149,10 @@ public interface MediaFileRepository extends JpaRepository<MediaFile, Integer> {
     @Query("UPDATE MediaFile m SET m.present = false, m.childrenLastUpdated = :childrenLastUpdated WHERE m.folder.id IN :folderIds AND m.lastScanned < :lastScanned")
     public void markNonPresentByFolderIds(@Param("folderIds") List<Integer> folderIds, @Param("childrenLastUpdated") Instant childrenLastUpdated, @Param("lastScanned") Instant lastScanned);
 
+    @Query("SELECT COALESCE(SUM(m.fileSize), 0) FROM MediaFile m WHERE m.folder IN :folders AND m.mediaType = :mediaType AND m.present = true")
+    public long sumFileSizeByFolderInAndMediaTypeAndPresentTrue(@Param("folders") List<MusicFolder> folders, @Param("mediaType") MediaType mediaType);
+
+    @Query("SELECT COALESCE(SUM(m.duration), 0.0) FROM MediaFile m WHERE m.folder IN :folders AND m.mediaType = :mediaType AND m.present = true")
+    public double sumDurationByFolderInAndMediaTypeAndPresentTrue(@Param("folders") List<MusicFolder> folders, @Param("mediaType") MediaType mediaType);
+
 }

@@ -931,6 +931,22 @@ public class MediaFileService {
 
             indexedTracks.addAll(embeddedTracks);
             result.addAll(indexedTracks);
+
+            // Override parent directory metadata from CUE.
+            // CUE sheet metadata takes priority over audio file embedded tags
+            // for single-file + CUE albums.
+            if (!indexedTracks.isEmpty()) {
+                MediaFile firstTrack = indexedTracks.get(0);
+                if (firstTrack.getAlbumName() != null) {
+                    parent.setAlbumName(firstTrack.getAlbumName());
+                    // Also set title so getName() uses it instead of folder name
+                    parent.setTitle(firstTrack.getAlbumName());
+                }
+                if (firstTrack.getAlbumArtist() != null) {
+                    parent.setArtist(firstTrack.getAlbumArtist());
+                    parent.setAlbumArtist(firstTrack.getAlbumArtist());
+                }
+            }
         }
 
         // m4b audio books
@@ -1488,12 +1504,10 @@ public class MediaFileService {
                                 cs = Charset.forName(cm.getName());
                             }
                             LOG.debug("Detected charset for cuesheet file {}: Charset detected as {}", cueFile, cs);
-                            // reset stream for parsing
-                            bis.reset();
                         }
-                        cueSheet = CueParser.parse(bis, cs);
+                        cueSheet = CueParser.parse(cueFile, cs);
                     } catch (IOException e) {
-                        LOG.warn("Defaulting to UTF-8 for cuesheet {}", cueFile);
+                        LOG.warn("Error parsing cuesheet {}, defaulting to UTF-8", cueFile, e);
                     }
                     // Lenient parser: warnings are logged at debug level, no need to nullify cueSheet
                     if (cueSheet != null && !cueSheet.getMessages().isEmpty()) {

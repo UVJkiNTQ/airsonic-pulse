@@ -8,11 +8,14 @@ import org.digitalmediaserver.cuelib.TrackData;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.BufferedInputStream;
 import java.io.BufferedReader;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.Charset;
+import java.nio.file.Path;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -87,6 +90,22 @@ public class CueParser {
     public static CueSheet parse(InputStream inputStream, Charset charset) throws IOException {
         CueParser parser = new CueParser();
         return parser.doParse(inputStream, charset);
+    }
+
+    /**
+     * Parse a CUE sheet from a file Path with the given charset.
+     * Opens its own stream so callers don't need to manage stream state.
+     *
+     * @param cueFile the path to the CUE file
+     * @param charset the character set to use for decoding
+     * @return the parsed CueSheet, or null if parsing failed
+     * @throws IOException if an I/O error occurs
+     */
+    public static CueSheet parse(Path cueFile, Charset charset) throws IOException {
+        try (FileInputStream fis = new FileInputStream(cueFile.toFile());
+             BufferedInputStream bis = new BufferedInputStream(fis)) {
+            return parse(bis, charset);
+        }
     }
 
     // ── parsing logic ───────────────────────────────────────────────────────

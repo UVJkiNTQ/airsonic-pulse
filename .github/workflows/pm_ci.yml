@@ -38,7 +38,7 @@ jobs:
       - name: Create music directory
         run: mkdir -p /tmp/music
       - name: Build and test
-        run: mvn clean verify
+        run: mvn clean verify -Dmaven.wagon.http.retryHandler.count=5 -Daether.connector.connectTimeout=300000 -Daether.connector.requestTimeout=300000
 
       - name: Generate checksums
         run: |

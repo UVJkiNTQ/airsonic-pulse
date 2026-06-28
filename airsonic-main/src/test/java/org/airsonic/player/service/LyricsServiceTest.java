@@ -2,6 +2,8 @@ package org.airsonic.player.service;
 
 import org.airsonic.player.domain.Lyrics;
 import org.airsonic.player.domain.MediaFile;
+import org.airsonic.player.domain.StructuredLyricsLine;
+import org.airsonic.player.parser.lyrics.EmbeddedLyricsParser;
 import org.airsonic.player.repository.LyricsRepository;
 import org.airsonic.player.util.MusicFolderTestData;
 import org.junit.jupiter.api.Test;
@@ -30,6 +32,8 @@ class LyricsServiceTest {
     private LyricsRepository lyricsRepository;
     @Mock
     private MediaFileService mediaFileService;
+    @Mock
+    private EmbeddedLyricsParser embeddedLyricsParser;
     @InjectMocks
     private LyricsService lyricsService;
 
@@ -182,5 +186,143 @@ class LyricsServiceTest {
         assertEquals(11, lyrics.getMediaFileId());
         assertEquals("user", lyrics.getSource());
         verify(lyricsRepository).save(lyrics);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Embedded lyrics tier (#158): DB cache -> LRC sidecar -> embedded tag -> null.
+    // ---------------------------------------------------------------------------------------
+
+    @Test
+    void getLyricsFromMediaFile_shouldReturnEmbeddedLyricsWhenNoCacheAndNoSidecar() {
+        // A path with no .lrc/.LRC sibling forces the embedded fallback. The embedded result is
+        // cached with source "tag" (distinct from the "file" sidecar source).
+        Path path = Path.of("no-sidecar-embedded.mp3");
+        when(mediaFile.isDirectory()).thenReturn(false);
+        when(mediaFile.isIndexedTrack()).thenReturn(false);
+        when(mediaFile.getId()).thenReturn(20);
+        when(mediaFile.getFullPath()).thenReturn(path);
+        when(lyricsRepository.findByMediaFileId(eq(20))).thenReturn(Optional.empty());
+        when(embeddedLyricsParser.getLyrics(path)).thenReturn("embedded lyrics");
+        when(lyricsRepository.save(any(Lyrics.class))).thenAnswer(invocation -> {
+            Lyrics saved = invocation.getArgument(0);
+            saved.setId(7);
+            return saved;
+        });
+
+        Lyrics result = lyricsService.getLyricsFromMediaFile(mediaFile);
+
+        assertNotNull(result);
+        assertEquals("embedded lyrics", result.getLyrics());
+        assertEquals(20, result.getMediaFileId());
+        assertEquals("tag", result.getSource());
+        verify(lyricsRepository).save(any(Lyrics.class));
+    }
+
+    @Test
+    void getLyricsFromMediaFile_shouldPreferSidecarOverEmbedded() {
+        // A real .lrc sidecar exists beside this fixture: the sidecar wins and the embedded reader
+        // is never consulted (a sidecar is a deliberate user override of the embedded tag).
+        Path path = MusicFolderTestData.resolveLyricsFolderPath().resolve("simple.mp3");
+        when(mediaFile.isDirectory()).thenReturn(false);
+        when(mediaFile.isIndexedTrack()).thenReturn(false);
+        when(mediaFile.getId()).thenReturn(21);
+        when(mediaFile.getFullPath()).thenReturn(path);
+        when(lyricsRepository.findByMediaFileId(eq(21))).thenReturn(Optional.empty());
+        when(lyricsRepository.save(any(Lyrics.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Lyrics result = lyricsService.getLyricsFromMediaFile(mediaFile);
+
+        assertNotNull(result);
+        assertEquals("file", result.getSource());
+        verifyNoInteractions(embeddedLyricsParser);
+    }
+
+    @Test
+    void getLyricsFromMediaFile_shouldPreferCacheOverEmbedded() {
+        // A DB cache hit short-circuits everything — neither sidecar nor embedded is consulted.
+        when(mediaFile.isDirectory()).thenReturn(false);
+        when(mediaFile.getId()).thenReturn(22);
+        Lyrics cached = new Lyrics("cached lyrics", 22, "tag");
+        when(lyricsRepository.findByMediaFileId(eq(22))).thenReturn(Optional.of(cached));
+
+        Lyrics result = lyricsService.getLyricsFromMediaFile(mediaFile);
+
+        assertEquals(cached, result);
+        verifyNoInteractions(embeddedLyricsParser);
+        verify(lyricsRepository, never()).save(any(Lyrics.class));
+    }
+
+    @Test
+    void getLyricsFromMediaFile_shouldReturnNullWhenNoCacheNoSidecarNoEmbedded() {
+        Path path = Path.of("no-lyrics-anywhere.mp3");
+        when(mediaFile.isDirectory()).thenReturn(false);
+        when(mediaFile.isIndexedTrack()).thenReturn(false);
+        when(mediaFile.getId()).thenReturn(23);
+        when(mediaFile.getFullPath()).thenReturn(path);
+        when(lyricsRepository.findByMediaFileId(eq(23))).thenReturn(Optional.empty());
+        when(embeddedLyricsParser.getLyrics(path)).thenReturn(null);
+
+        Lyrics result = lyricsService.getLyricsFromMediaFile(mediaFile);
+
+        assertNull(result);
+        verify(lyricsRepository, never()).save(any(Lyrics.class));
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Synced LRC lyrics (#140): a timestamped sidecar preserves per-line times into structured
+    // lines + synced=true, while still populating the flat blob for the legacy endpoint.
+    // ---------------------------------------------------------------------------------------
+
+    @Test
+    void getLyricsFromMediaFile_shouldPreserveTimestampsFromSyncedSidecar() {
+        Path path = MusicFolderTestData.resolveLyricsFolderPath().resolve("simple.mp3");
+        when(mediaFile.isDirectory()).thenReturn(false);
+        when(mediaFile.isIndexedTrack()).thenReturn(false);
+        when(mediaFile.getId()).thenReturn(30);
+        when(mediaFile.getFullPath()).thenReturn(path);
+        when(lyricsRepository.findByMediaFileId(eq(30))).thenReturn(Optional.empty());
+        when(lyricsRepository.save(any(Lyrics.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Lyrics result = lyricsService.getLyricsFromMediaFile(mediaFile);
+
+        // synced flag + structured lines populated from the LRC timestamps.
+        assertTrue(result.isSynced());
+        assertEquals("file", result.getSource());
+        assertFalse(result.getLines().isEmpty());
+        // First line: [00:10.37] -> 10370 ms, "Lyrics1 Line 1"; position runs 0..n monotonically.
+        StructuredLyricsLine first = result.getLines().get(0);
+        assertEquals(0, first.getPosition());
+        assertEquals(10370L, first.getStartMs());
+        assertEquals("Lyrics1 Line 1", first.getText());
+        // The double-timestamped second line ([00:20.09][00:25.31]Lyrics2 Line 2) emits two lines.
+        assertEquals(20090L, result.getLines().get(1).getStartMs());
+        assertEquals(25310L, result.getLines().get(2).getStartMs());
+        assertEquals("Lyrics2 Line 2", result.getLines().get(2).getText());
+        // The flat blob is still populated (legacy /getLyrics + unsynced split rely on it).
+        assertTrue(result.getLyrics().startsWith("Lyrics1 Line 1\n"));
+        // Each structured line back-references its parent and is position-ordered.
+        for (int i = 0; i < result.getLines().size(); i++) {
+            assertEquals(i, result.getLines().get(i).getPosition());
+            assertEquals(result, result.getLines().get(i).getLyrics());
+        }
+    }
+
+    @Test
+    void getLyricsFromMediaFile_embeddedTagIsUnsyncedWithNoStructuredLines() {
+        // The embedded tier (#158) has no timestamps: synced stays false and no structured lines.
+        Path path = Path.of("no-sidecar-synced.mp3");
+        when(mediaFile.isDirectory()).thenReturn(false);
+        when(mediaFile.isIndexedTrack()).thenReturn(false);
+        when(mediaFile.getId()).thenReturn(31);
+        when(mediaFile.getFullPath()).thenReturn(path);
+        when(lyricsRepository.findByMediaFileId(eq(31))).thenReturn(Optional.empty());
+        when(embeddedLyricsParser.getLyrics(path)).thenReturn("plain embedded line");
+        when(lyricsRepository.save(any(Lyrics.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Lyrics result = lyricsService.getLyricsFromMediaFile(mediaFile);
+
+        assertFalse(result.isSynced());
+        assertTrue(result.getLines().isEmpty());
+        assertEquals("tag", result.getSource());
     }
 }

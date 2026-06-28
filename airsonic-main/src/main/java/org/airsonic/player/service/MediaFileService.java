@@ -1504,8 +1504,12 @@ public class MediaFileService {
                                 cs = Charset.forName(cm.getName());
                             }
                             LOG.debug("Detected charset for cuesheet file {}: Charset detected as {}", cueFile, cs);
+                            // CharsetDetector consumed the stream; re-open from file path
+                            cueSheet = CueParser.parse(cueFile, cs);
+                        } else {
+                            // BOM already consumed from bis; use the positioned stream
+                            cueSheet = CueParser.parse(bis, cs);
                         }
-                        cueSheet = CueParser.parse(cueFile, cs);
                     } catch (IOException e) {
                         LOG.warn("Error parsing cuesheet {}, defaulting to UTF-8", cueFile, e);
                     }

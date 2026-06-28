@@ -118,8 +118,27 @@ public class CueParser {
 
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, charset))) {
             String line;
+            StringBuilder continuation = null;
             while ((line = reader.readLine()) != null) {
                 lineNumber++;
+
+                // Handle continuation of a multi-line quoted string
+                if (continuation != null) {
+                    continuation.append('\n').append(line);
+                    if (hasClosingQuote(line)) {
+                        String merged = continuation.toString();
+                        continuation = null;
+                        parseLine(merged);
+                    }
+                    continue;
+                }
+
+                // Check if this line starts a multi-line quoted string
+                if (hasUnclosedQuote(line)) {
+                    continuation = new StringBuilder(line);
+                    continue;
+                }
+
                 parseLine(line);
             }
         }
@@ -435,6 +454,24 @@ public class CueParser {
     }
 
     // ── helper methods ──────────────────────────────────────────────────────
+
+    /**
+     * Check if a line has an opening quote but no closing quote (multi-line string start).
+     */
+    private boolean hasUnclosedQuote(String line) {
+        int firstQuote = line.indexOf('"');
+        int lastQuote = line.lastIndexOf('"');
+        return firstQuote >= 0 && (firstQuote == lastQuote)
+            && (matches(line, PATTERN_TITLE) || matches(line, PATTERN_PERFORMER)
+                || matches(line, PATTERN_SONGWRITER) || matches(line, PATTERN_FILE));
+    }
+
+    /**
+     * Check if a continuation line contains the closing quote.
+     */
+    private boolean hasClosingQuote(String line) {
+        return line.indexOf('"') >= 0;
+    }
 
     /**
      * Extract the first double-quoted string from a line.

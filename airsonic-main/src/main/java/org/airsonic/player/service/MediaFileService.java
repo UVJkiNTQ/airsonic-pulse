@@ -39,6 +39,7 @@ import org.airsonic.player.repository.MusicFileInfoRepository;
 import org.airsonic.player.repository.OffsetBasedPageRequest;
 import org.airsonic.player.repository.StarredMediaFileRepository;
 import org.airsonic.player.service.cache.MediaFileCache;
+import org.airsonic.player.service.cue.CueParser;
 import org.airsonic.player.service.metadata.Chapter;
 import org.airsonic.player.service.metadata.FFmpegParser;
 import org.airsonic.player.service.metadata.JaudiotaggerParser;
@@ -49,7 +50,6 @@ import org.airsonic.player.util.FileUtil;
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
-import org.digitalmediaserver.cuelib.CueParser;
 import org.digitalmediaserver.cuelib.CueSheet;
 import org.digitalmediaserver.cuelib.FileData;
 import org.digitalmediaserver.cuelib.Position;
@@ -1408,28 +1408,42 @@ public class MediaFileService {
             switch (ext) {
                 case "cue":
                     Charset cs = Charset.forName("UTF-8"); // default to UTF-8
-                    // attempt to detect encoding for cueFile, fallback to UTF-8
+                    // Detect encoding and BOM from the file
+                    boolean bomFound = false;
                     int THRESHOLD = 35; // 0-100, the higher the more certain the guess
-                    CharsetDetector cd = new CharsetDetector();
                     try (FileInputStream fis = new FileInputStream(cueFile.toFile());
-                        BufferedInputStream bis = new BufferedInputStream(fis);) {
-                        cd.setText(bis);
-                        CharsetMatch cm = cd.detect();
-                        if (cm != null && cm.getConfidence() > THRESHOLD) {
-                            cs = Charset.forName(cm.getName());
-                        }
-                        LOG.debug("Detected charset for cuesheet file {}: Charset detected as {}", cueFile, cs);
+                         BufferedInputStream bis = new BufferedInputStream(fis)) {
+                        // Check for BOM first
                         bis.mark(3);
-
-                        // check for BOM
                         byte[] bom = new byte[3];
                         int bytesRead = bis.read(bom, 0, 3);
-                        if (!hasBOM(bom, bytesRead)) {
+                        if (hasBOM(bom, bytesRead)) {
+                            bomFound = true;
+                            cs = Charset.forName("UTF-8");
+                            LOG.debug("Detected BOM for cuesheet file {}, forcing UTF-8", cueFile);
+                        } else {
                             bis.reset();
                         }
-                        cueSheet = CueParser.parse(bis, cs);
+
+                        // Detect encoding (CharsetDetector consumes the stream)
+                        if (!bomFound) {
+                            CharsetDetector cd = new CharsetDetector();
+                            cd.setText(bis);
+                            CharsetMatch cm = cd.detect();
+                            if (cm != null && cm.getConfidence() > THRESHOLD) {
+                                cs = Charset.forName(cm.getName());
+                            }
+                            LOG.debug("Detected charset for cuesheet file {}: Charset detected as {}", cueFile, cs);
+                        }
+
+                        // Parse: for BOM files use positioned stream, for others re-open
+                        if (bomFound) {
+                            cueSheet = CueParser.parse(bis, cs);
+                        } else {
+                            cueSheet = CueParser.parse(cueFile, cs);
+                        }
                     } catch (IOException e) {
-                        LOG.warn("Defaulting to UTF-8 for cuesheet {}", cueFile);
+                        LOG.warn("Error parsing cuesheet {}, defaulting to UTF-8", cueFile, e);
                     }
                     if (cueSheet != null) {
                         if (cueSheet.getMessages().stream().filter(m -> m.toString().toLowerCase().contains("warning"))

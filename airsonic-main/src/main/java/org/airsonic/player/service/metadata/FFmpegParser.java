@@ -123,13 +123,14 @@ public class FFmpegParser extends MetaDataParser {
         metaData.setBitRate(result.at("/format/bit_rate").asInt() / 1000);
 
         // Vorbis comments (FLAC/OGG/Opus) use the no-separator canonical key ALBUMARTIST;
-        // ID3v2 TPE2 and MP4 aART are normalized to album_artist by ffprobe. getData's
-        // case-variation covers the lower/upper/capitalize forms of one base key but
-        // can't bridge the separator difference, so both aliases are listed explicitly.
-        metaData.setAlbumArtist(getDataAny(result, "album_artist", "ALBUMARTIST"));
+        // ID3v2 TPE2 and MP4 aART are normalized to album_artist by ffprobe. APEv2
+        // (WavPack, Musepack, Monkey's Audio) uses "Album artist" with a space, which
+        // getData's case variations (lower/upper/Capitalize) can't bridge to the
+        // underscore form, so all three aliases are listed explicitly.
+        metaData.setAlbumArtist(getDataAny(result, "album_artist", "ALBUMARTIST", "Album artist"));
         metaData.setArtist(getData(result, "artist"));
         metaData.setAlbumName(getData(result, "album"));
-        metaData.setGenre(getData(result, "genre"));
+        setGenreAndGenres(result, metaData);
         metaData.setTitle(getData(result, "title"));
 
         // Sort-name trio. ffprobe surfaces ID3v2 sort frames as hyphenated names
@@ -182,12 +183,10 @@ public class FFmpegParser extends MetaDataParser {
                 metaData.setDiscNumber(NumberUtils.createInteger(data));
             }
         }
-        data = getData(result, "date");
-        // Raw date is exposed as releaseDate so the response can surface month/day when the tag
-        // carries them; the integer year derives from the same source via parseYear, which
-        // extracts the leading 4 digits for full YYYY-MM-DD values — matches JaudiotaggerParser
-        // (FieldKey.YEAR + YEAR_NUMBER_PATTERN) so the same input file yields the same year
-        // through either parser.
+        // ID3v2 / Vorbis / MP4 normalise to "date"; APEv2 (WavPack, Musepack) uses "Year"
+        // (ffprobe preserves the original case). Try both so the same input file yields the
+        // same year through either parser.
+        data = getDataAny(result, "date", "year");
         metaData.setReleaseDate(data);
         metaData.setYear(parseYear(data));
         // originalReleaseDate fallback order mirrors JaudiotaggerParser: ORIGINALRELEASEDATE
@@ -264,6 +263,32 @@ public class FFmpegParser extends MetaDataParser {
             }
         }
         return null;
+    }
+
+    /**
+     * Populates both {@link MetaData#setGenre} (scalar) and {@link MetaData#setGenres} (list)
+     * from the ffprobe genre tag. APEv2 (WavPack, Musepack, Monkey's Audio) and ID3v2.4 use
+     * null-byte ({@code \0}) multi-value separators; Vorbis comments produce multiple
+     * same-key instances that ffprobe collapses with null bytes. The scalar genre is the first
+     * value; the list carries all values so downstream {@code packGenres} can populate the
+     * packed column for multi-frame genre queries.
+     */
+    static void setGenreAndGenres(JsonNode node, MetaData metaData) {
+        String rawGenre = getData(node, "genre");
+        if (rawGenre == null || rawGenre.isEmpty()) {
+            return;
+        }
+        // Split on the APEv2 / ID3v2.4 null-byte separator. Use a regex split on the literal
+        // \0 character; String.split handles trailing empty tokens correctly.
+        List<String> values = Arrays.stream(rawGenre.split("\0", -1))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toList();
+        if (values.isEmpty()) {
+            return;
+        }
+        metaData.setGenre(values.get(0));
+        metaData.setGenres(values);
     }
 
     static String getData(JsonNode node, String keyName) {

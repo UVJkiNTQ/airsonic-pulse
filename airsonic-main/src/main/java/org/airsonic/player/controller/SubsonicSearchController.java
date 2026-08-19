@@ -53,17 +53,29 @@ import static org.springframework.web.bind.ServletRequestUtils.getIntParameter;
 public class SubsonicSearchController extends AbstractSubsonicController {
 
     /**
-     * Upper bound for any per-request count or offset on the search endpoints (#262). Both flow to
-     * {@code SearchServiceImpl} as {@code searcher.search(query, offset + count)}, which makes
+     * Upper bound for any per-request page size on the search endpoints (#262/#285). Counts flow
+     * to {@code SearchServiceImpl} as {@code searcher.search(query, offset + count)}, which makes
      * Lucene pre-allocate a {@code TopDocs} collector sized to {@code offset + count} before
      * collecting any document — an authenticated client passing {@code songCount=2147483647} could
-     * OOM the JVM (and an abusive {@code offset} could overflow {@code offset + count} to a
-     * negative). Clamping both to this ceiling bounds the allocation to {@code 2 * MAX_COUNT} and
-     * removes the overflow. The value matches the existing getAlbumList / getAlbumList2 size
-     * ceiling, keeping the Subsonic surface consistent; it is comfortably above any legitimate
-     * client search request (clients page 20–100 at a time) and below memory pressure.
+     * OOM the JVM. Clamping every count to this ceiling bounds a single page.
+     * <p>
+     * Offsets are bounded separately by {@link #MAX_OFFSET}: the original #285 clamp applied the
+     * same 500 ceiling to offsets, which silently broke deep pagination — a client paging a large
+     * library (Symfonium's full-library scan pages artists/albums/songs in 500-entry slices)
+     * requests offsets of 2000+ and receives the slice at offset 500 every time. Offsets must
+     * therefore be allowed to grow deep, while still being capped so {@code offset + count} cannot
+     * overflow or allocate an unbounded TopDocs.
      */
     static final int MAX_COUNT = 500;
+
+    /**
+     * Upper bound for any per-request offset on the search endpoints. Large enough to page through
+     * a multi-million-entry library (a 1M track library in 500-entry slices needs offsets to
+     * ~1M), while capping the {@code searcher.search(query, offset + count)} TopDocs allocation at
+     * ~{@code MAX_OFFSET} (~30 MB) — a single deep page is harmless, and the {@code
+     * Integer.MAX_VALUE} overflow path (#285) is closed.
+     */
+    static final int MAX_OFFSET = 1_000_000;
 
     @Autowired
     private SearchService searchService;
@@ -105,8 +117,8 @@ public class SubsonicSearchController extends AbstractSubsonicController {
 
         SearchCriteria criteria = new SearchCriteria();
         criteria.setQuery(query.toString().trim());
-        criteria.setCount(clamp(getIntParameter(request, "count", 20)));
-        criteria.setOffset(clamp(getIntParameter(request, "offset", 0)));
+        criteria.setCount(clampCount(getIntParameter(request, "count", 20)));
+        criteria.setOffset(clampOffset(getIntParameter(request, "offset", 0)));
         List<org.airsonic.player.domain.MusicFolder> musicFolders = mediaFolderService.getMusicFoldersForUser(username);
 
         org.airsonic.player.domain.SearchResult result = searchService.search(criteria, musicFolders, IndexType.SONG);
@@ -135,22 +147,22 @@ public class SubsonicSearchController extends AbstractSubsonicController {
         String query = request.getParameter("query");
         SearchCriteria criteria = new SearchCriteria();
         criteria.setQuery(StringUtils.trimToEmpty(query));
-        criteria.setCount(clamp(getIntParameter(request, "artistCount", 20)));
-        criteria.setOffset(clamp(getIntParameter(request, "artistOffset", 0)));
+        criteria.setCount(clampCount(getIntParameter(request, "artistCount", 20)));
+        criteria.setOffset(clampOffset(getIntParameter(request, "artistOffset", 0)));
         org.airsonic.player.domain.SearchResult artists = searchService.search(criteria, musicFolders, IndexType.ARTIST);
         for (MediaFile mediaFile : artists.getMediaFiles()) {
             searchResult.getArtist().add(jaxbContentService.createJaxbArtist(mediaFile, username));
         }
 
-        criteria.setCount(clamp(getIntParameter(request, "albumCount", 20)));
-        criteria.setOffset(clamp(getIntParameter(request, "albumOffset", 0)));
+        criteria.setCount(clampCount(getIntParameter(request, "albumCount", 20)));
+        criteria.setOffset(clampOffset(getIntParameter(request, "albumOffset", 0)));
         org.airsonic.player.domain.SearchResult albums = searchService.search(criteria, musicFolders, IndexType.ALBUM);
         for (MediaFile mediaFile : albums.getMediaFiles()) {
             searchResult.getAlbum().add(jaxbContentService.createJaxbChild(player, mediaFile, username));
         }
 
-        criteria.setCount(clamp(getIntParameter(request, "songCount", 20)));
-        criteria.setOffset(clamp(getIntParameter(request, "songOffset", 0)));
+        criteria.setCount(clampCount(getIntParameter(request, "songCount", 20)));
+        criteria.setOffset(clampOffset(getIntParameter(request, "songOffset", 0)));
         org.airsonic.player.domain.SearchResult songs = searchService.search(criteria, musicFolders, IndexType.SONG);
         for (MediaFile mediaFile : songs.getMediaFiles()) {
             searchResult.getSong().add(jaxbContentService.createJaxbChild(player, mediaFile, username));
@@ -174,12 +186,12 @@ public class SubsonicSearchController extends AbstractSubsonicController {
         String query = request.getParameter("query");
         // replace empty string with null
         query = "\"\"".equals(query) ? null : query;
-        int songCount = clamp(getIntParameter(request, "songCount", 20));
-        int songOffset = clamp(getIntParameter(request, "songOffset", 0));
-        int albumCount = clamp(getIntParameter(request, "albumCount", 20));
-        int albumOffset = clamp(getIntParameter(request, "albumOffset", 0));
-        int artistCount = clamp(getIntParameter(request, "artistCount", 20));
-        int artistOffset = clamp(getIntParameter(request, "artistOffset", 0));
+        int songCount = clampCount(getIntParameter(request, "songCount", 20));
+        int songOffset = clampOffset(getIntParameter(request, "songOffset", 0));
+        int albumCount = clampCount(getIntParameter(request, "albumCount", 20));
+        int albumOffset = clampOffset(getIntParameter(request, "albumOffset", 0));
+        int artistCount = clampCount(getIntParameter(request, "artistCount", 20));
+        int artistOffset = clampOffset(getIntParameter(request, "artistOffset", 0));
         if (StringUtils.isEmpty(query)) {
             if (artistCount > 0) {
                 artistService.getArtists(musicFolders, artistCount, artistOffset).forEach(artist -> searchResult.getArtist().add(jaxbContentService.createJaxbArtist(new ArtistID3(), artist, username)));
@@ -221,12 +233,21 @@ public class SubsonicSearchController extends AbstractSubsonicController {
     }
 
     /**
-     * Bounds a per-request count or offset to {@code [0, MAX_COUNT]} (#262). Silent — a client
+     * Bounds a per-request page size to {@code [0, MAX_COUNT]} (#262). Silent — a client
      * requesting more simply receives {@code MAX_COUNT} back rather than an error. The lower floor
      * also normalises a negative value (which {@code getIntParameter} passes through unchanged).
      */
-    static int clamp(int value) {
+    static int clampCount(int value) {
         return Math.max(0, Math.min(MAX_COUNT, value));
+    }
+
+    /**
+     * Bounds a per-request offset to {@code [0, MAX_OFFSET]}. Keeps {@code offset + count} from
+     * overflowing (and the TopDocs allocation bounded) while permitting legitimate deep pagination
+     * through a large library.
+     */
+    static int clampOffset(int value) {
+        return Math.max(0, Math.min(MAX_OFFSET, value));
     }
 
 }

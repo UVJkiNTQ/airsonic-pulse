@@ -200,7 +200,48 @@ public class JAXBWriter {
             throw new RuntimeException(x);
         }
 
-        return Pair.of(type.toString(), writer.toString());
+        // Defensive sanitization: MOXy writes string values verbatim, so a control character
+        // (e.g. a null byte from mojibake APEv2 tags) lands raw in the response and produces
+        // invalid XML/JSON that strict Subsonic clients (Symfonium, etc.) cannot parse — they
+        // hang waiting for a well-formed document. Replace every XML-invalid character with
+        // U+FFFD so a single bad tag can never corrupt the whole response.
+        return Pair.of(type.toString(), sanitizeInvalidXmlChars(writer.toString()));
+    }
+
+    /**
+     * Replaces XML 1.0-invalid characters with U+FFFD (replacement character). Valid per
+     * XML 1.0 5th ed: tab (0x09), LF (0x0A), CR (0x0D), 0x20-0xD7FF, 0xE000-0xFFFD, and
+     * supplementary planes 0x10000-0x10FFFF. Surrogate pairs are handled so valid emoji /
+     * supplementary characters survive intact.
+     */
+    static String sanitizeInvalidXmlChars(String value) {
+        if (value == null || value.isEmpty()) {
+            return value;
+        }
+        StringBuilder sb = new StringBuilder(value.length());
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c >= 0xD800 && c <= 0xDBFF && i + 1 < value.length()) {
+                char low = value.charAt(i + 1);
+                if (low >= 0xDC00 && low <= 0xDFFF) {
+                    // Valid surrogate pair (supplementary character) — keep both.
+                    int cp = Character.toCodePoint(c, low);
+                    if (cp >= 0x10000 && cp <= 0x10FFFF) {
+                        sb.append(c).append(low);
+                        i++;
+                        continue;
+                    }
+                }
+            }
+            sb.append(isValidXmlChar(c) ? c : '\uFFFD');
+        }
+        return sb.toString();
+    }
+
+    private static boolean isValidXmlChar(char c) {
+        return c == 0x09 || c == 0x0A || c == 0x0D
+                || (c >= 0x20 && c <= 0xD7FF)
+                || (c >= 0xE000 && c <= 0xFFFD);
     }
 
     public XMLGregorianCalendar convertDate(Instant date) {

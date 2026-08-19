@@ -116,7 +116,7 @@ class SubsonicSearchControllerTest {
 
         assertThat(searchArgs).hasSize(1);
         assertThat(searchArgs.get(0)[0]).isEqualTo(500);   // count clamped
-        assertThat(searchArgs.get(0)[1]).isEqualTo(500);   // offset clamped
+        assertThat(searchArgs.get(0)[1]).isEqualTo(SubsonicSearchController.MAX_OFFSET);   // offset bounded, not page-sized
     }
 
     @Test
@@ -151,7 +151,7 @@ class SubsonicSearchControllerTest {
     @Test
     void search_clampsAbusiveOffsetEvenWithSmallCount() throws Exception {
         // The offset is added to count at the allocation point; an abusive offset alone (which
-        // would overflow offset+count to a negative) is independently clamped.
+        // would overflow offset+count to a negative) is independently bounded to MAX_OFFSET.
         MockHttpServletRequest request = req();
         request.setParameter("query", "anything");
         request.setParameter("count", "20");
@@ -160,7 +160,7 @@ class SubsonicSearchControllerTest {
         controller.search(request, new MockHttpServletResponse());
 
         assertThat(searchArgs.get(0)[0]).isEqualTo(20);
-        assertThat(searchArgs.get(0)[1]).isEqualTo(500);
+        assertThat(searchArgs.get(0)[1]).isEqualTo(SubsonicSearchController.MAX_OFFSET);
     }
 
     @Test
@@ -190,15 +190,31 @@ class SubsonicSearchControllerTest {
     }
 
     @Test
-    void clamp_helperBoundsToZeroAndMaxCount() {
+    void clampCount_helperBoundsToZeroAndMaxCount() {
         // Direct seam: the load-bearing arithmetic, including the negative floor and the ceiling
-        // that bounds offset+count (and removes the offset+count integer-overflow path).
-        assertThat(SubsonicSearchController.clamp(Integer.MAX_VALUE)).isEqualTo(500);
-        assertThat(SubsonicSearchController.clamp(501)).isEqualTo(500);
-        assertThat(SubsonicSearchController.clamp(500)).isEqualTo(500);
-        assertThat(SubsonicSearchController.clamp(100)).isEqualTo(100);
-        assertThat(SubsonicSearchController.clamp(0)).isEqualTo(0);
-        assertThat(SubsonicSearchController.clamp(-1)).isEqualTo(0);
-        assertThat(SubsonicSearchController.clamp(Integer.MIN_VALUE)).isEqualTo(0);
+        // that bounds a single page size.
+        assertThat(SubsonicSearchController.clampCount(Integer.MAX_VALUE)).isEqualTo(500);
+        assertThat(SubsonicSearchController.clampCount(501)).isEqualTo(500);
+        assertThat(SubsonicSearchController.clampCount(500)).isEqualTo(500);
+        assertThat(SubsonicSearchController.clampCount(100)).isEqualTo(100);
+        assertThat(SubsonicSearchController.clampCount(0)).isEqualTo(0);
+        assertThat(SubsonicSearchController.clampCount(-1)).isEqualTo(0);
+        assertThat(SubsonicSearchController.clampCount(Integer.MIN_VALUE)).isEqualTo(0);
+    }
+
+    @Test
+    void clampOffset_allowsDeepPagination_boundedByMaxOffset() {
+        // Deep pagination must work: a client paging a large library (Symfonium full-library
+        // scan uses 500-entry slices) legitimately requests offsets well past MAX_COUNT. The
+        // original #285 clamp reused MAX_COUNT for offsets, which made every page beyond 500
+        // return the same slice. Offsets must be allowed deep while still bounded to prevent
+        // offset+count overflow / unbounded TopDocs allocation.
+        assertThat(SubsonicSearchController.clampOffset(2000)).isEqualTo(2000);
+        assertThat(SubsonicSearchController.clampOffset(50_000)).isEqualTo(50_000);
+        assertThat(SubsonicSearchController.clampOffset(SubsonicSearchController.MAX_OFFSET)).isEqualTo(SubsonicSearchController.MAX_OFFSET);
+        assertThat(SubsonicSearchController.clampOffset(SubsonicSearchController.MAX_OFFSET + 1)).isEqualTo(SubsonicSearchController.MAX_OFFSET);
+        assertThat(SubsonicSearchController.clampOffset(Integer.MAX_VALUE)).isEqualTo(SubsonicSearchController.MAX_OFFSET);
+        assertThat(SubsonicSearchController.clampOffset(-1)).isEqualTo(0);
+        assertThat(SubsonicSearchController.clampOffset(Integer.MIN_VALUE)).isEqualTo(0);
     }
 }

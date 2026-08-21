@@ -407,11 +407,10 @@ class ApiKeyServiceTest {
     void markUsed_nullLastUsed_writes() {
         ApiKey k = new ApiKey("alice", "h", "k", Instant.now(), null);
         k.setId(7);
-        when(apiKeyRepository.save(any(ApiKey.class))).thenAnswer(inv -> inv.getArgument(0));
 
         service.markUsed(k, Duration.ofMinutes(5));
 
-        verify(apiKeyRepository).save(k);
+        verify(apiKeyRepository).markUsed(any(), any(), any());
         assertNotNull(k.getLastUsed());
     }
 
@@ -421,11 +420,10 @@ class ApiKeyServiceTest {
         k.setId(7);
         k.setLastUsed(Instant.now().minus(10, ChronoUnit.MINUTES));
         Instant before = k.getLastUsed();
-        when(apiKeyRepository.save(any(ApiKey.class))).thenAnswer(inv -> inv.getArgument(0));
 
         service.markUsed(k, Duration.ofMinutes(5));
 
-        verify(apiKeyRepository).save(k);
+        verify(apiKeyRepository).markUsed(any(), any(), any());
         assertTrue(k.getLastUsed().isAfter(before));
     }
 
@@ -439,7 +437,7 @@ class ApiKeyServiceTest {
 
         service.markUsed(k, Duration.ofMinutes(5));
 
-        verify(apiKeyRepository, never()).save(any());
+        verify(apiKeyRepository, never()).markUsed(any(), any(), any());
     }
 
     @Test

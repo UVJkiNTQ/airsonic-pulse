@@ -176,8 +176,10 @@ public class ApiKeyService {
     /**
      * Update {@code last_used} on the given key, but only when the stored value is null or
      * older than {@code throttle}. Called from the auth hot path (per-request authentication)
-     * — the throttle keeps the DB write rare, since the entity is already in hand from a
-     * preceding {@link #resolve} the caller doesn't pay an extra read.
+     * — the throttle keeps the DB write rare. The write is an atomic conditional UPDATE (the
+     * staleness check is in the WHERE clause), so a burst of concurrent auth hits on the same
+     * key cannot read-modify-write the same row and trip the DB's optimistic-lock detection
+     * (MariaDB error 1020 "Record has changed since last read").
      */
     @Transactional
     public void markUsed(ApiKey apiKey, Duration throttle) {
@@ -189,8 +191,8 @@ public class ApiKeyService {
         if (lastUsed != null && lastUsed.isAfter(now.minus(throttle))) {
             return;
         }
+        apiKeyRepository.markUsed(apiKey.getId(), now, now.minus(throttle));
         apiKey.setLastUsed(now);
-        apiKeyRepository.save(apiKey);
     }
 
     String hash(String rawKey) {

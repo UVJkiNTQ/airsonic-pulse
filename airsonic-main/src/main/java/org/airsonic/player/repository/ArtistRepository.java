@@ -38,6 +38,8 @@ public interface ArtistRepository extends JpaRepository<Artist, Integer> {
 
     public Optional<Artist> findByName(String name);
 
+    public List<Artist> findByNameIn(Iterable<String> names);
+
     public Optional<Artist> findByNameAndFolderIn(String name, Iterable<MusicFolder> folders);
 
     public List<Artist> findByFolderInAndPresentTrue(Iterable<MusicFolder> folders, Sort sort);

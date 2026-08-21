@@ -35,6 +35,8 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import org.subsonic.restapi.AlbumID3;
 import org.subsonic.restapi.ArtistID3;
 import org.subsonic.restapi.Child;
@@ -44,6 +46,8 @@ import org.subsonic.restapi.MediaType;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -237,6 +241,38 @@ class JaxbContentServiceTest {
             assertNotNull(result.getPlayed());
             assertEquals("mbid-album-123", result.getMusicBrainzId());
             assertEquals("ArtistName", result.getDisplayArtist());
+        }
+
+        @Test
+        void createJaxbAlbums_batchesTrackLookupOnceForTheWholePage() {
+            Album album1 = mock(Album.class);
+            Album album2 = mock(Album.class);
+            when(album1.getId()).thenReturn(1);
+            when(album1.getName()).thenReturn("Album A");
+            when(album1.getArtist()).thenReturn("Artist A");
+            when(album2.getId()).thenReturn(2);
+            when(album2.getName()).thenReturn("Album B");
+            when(album2.getArtist()).thenReturn("Artist B");
+            when(coverArtService.getAlbumArts(Set.of(1, 2))).thenReturn(Map.of(1, coverArt, 2, coverArt));
+            when(artistService.getArtistsByName(Set.of("Artist A", "Artist B"))).thenReturn(Map.of());
+            when(albumService.getAlbumStarredDates(Set.of(1, 2), "user")).thenReturn(Map.of());
+
+            MediaFile track = mock(MediaFile.class);
+            when(mediaFileService.getSongsForAlbums(List.of(album1, album2)))
+                    .thenReturn(Map.of(new MediaFileService.AlbumKey("Artist A", "Album A"), List.of(track)));
+
+            List<AlbumID3> result = service.createJaxbAlbums(List.of(album1, album2), "user", a -> new AlbumID3());
+
+            assertEquals(2, result.size());
+            assertEquals("1", result.get(0).getId());
+            assertEquals("2", result.get(1).getId());
+            // A single batched lookup replaces the N+1 per-album calls.
+            verify(mediaFileService).getSongsForAlbums(List.of(album1, album2));
+            verify(mediaFileService, never()).getSongsForAlbum(any(), any());
+            // Batched artist / cover art / starred preloads replace per-album round-trips.
+            verify(coverArtService).getAlbumArts(Set.of(1, 2));
+            verify(artistService).getArtistsByName(Set.of("Artist A", "Artist B"));
+            verify(albumService).getAlbumStarredDates(Set.of(1, 2), "user");
         }
 
         @Test
@@ -644,6 +680,7 @@ class JaxbContentServiceTest {
     }
 
     @Nested
+    @MockitoSettings(strictness = Strictness.LENIENT)
     class JaxbChildTest {
         @Mock
         private MediaFile mediaFile;
@@ -975,6 +1012,72 @@ class JaxbContentServiceTest {
 
             assertNull(child.getGenre());
             assertTrue(child.getGenres().isEmpty());
+        }
+
+        @Test
+        void createJaxbChildren_batchesLookupsOnceForTheWholePage() {
+            Player player = mock(Player.class);
+            MediaFile song1 = mock(MediaFile.class);
+            MediaFile song2 = mock(MediaFile.class);
+            MediaFile parent1 = mock(MediaFile.class);
+            MusicFolder folder = new MusicFolder(1, java.nio.file.Paths.get("/music"), "Library",
+                    org.airsonic.player.domain.MusicFolder.Type.MEDIA, true, Instant.now());
+
+            when(song1.getId()).thenReturn(1);
+            when(song1.getParentPath()).thenReturn("album/");
+            when(song1.getFolder()).thenReturn(folder);
+            when(song1.isDirectory()).thenReturn(false);
+            when(song1.isFile()).thenReturn(true);
+            when(song1.getName()).thenReturn("a.mp3");
+            lenient().when(song1.getAlbumName()).thenReturn("Album A");
+            lenient().when(song1.getAlbumArtist()).thenReturn("Artist A");
+            when(song1.getArtist()).thenReturn("Artist A");
+            when(song1.getFormat()).thenReturn("mp3");
+            when(song1.getMediaType()).thenReturn(org.airsonic.player.domain.MediaFile.MediaType.MUSIC);
+            when(song1.getContributors()).thenReturn(null);
+
+            when(song2.getId()).thenReturn(2);
+            when(song2.getParentPath()).thenReturn("album/");
+            when(song2.getFolder()).thenReturn(folder);
+            when(song2.isDirectory()).thenReturn(false);
+            when(song2.isFile()).thenReturn(true);
+            when(song2.getName()).thenReturn("b.mp3");
+            lenient().when(song2.getAlbumName()).thenReturn("Album A");
+            lenient().when(song2.getAlbumArtist()).thenReturn("Artist A");
+            when(song2.getArtist()).thenReturn("Artist A");
+            when(song2.getFormat()).thenReturn("mp3");
+            when(song2.getMediaType()).thenReturn(org.airsonic.player.domain.MediaFile.MediaType.MUSIC);
+            when(song2.getContributors()).thenReturn(null);
+
+            when(parent1.getId()).thenReturn(900);
+            when(mediaFileService.getParentsOf(List.of(song1, song2)))
+                    .thenReturn(Map.of(song1, parent1, song2, parent1));
+            when(coverArtService.getMediaFileArts(Set.of(900))).thenReturn(Map.of(900, coverArt));
+            when(mediaFileService.getMediaFileStarredDates(List.of(song1, song2), "user")).thenReturn(Map.of());
+            when(ratingService.getRatingsForUser("user", List.of(song1, song2))).thenReturn(Map.of());
+            when(ratingService.getAverageRatings(List.of(song1, song2))).thenReturn(Map.of());
+            when(albumService.getAlbumsByMediaFiles(List.of(song1, song2)))
+                    .thenReturn(Map.of(new MediaFileService.AlbumKey("Artist A", "Album A"), mock(Album.class)));
+            when(artistService.getArtistsByName(Set.of("Artist A"))).thenReturn(Map.of());
+
+            List<Child> result = service.createJaxbChildren(player, List.of(song1, song2), "user", s -> new Child());
+
+            assertEquals(2, result.size());
+            // Batched preloads replace the per-child N+1 round-trips.
+            verify(mediaFileService).getParentsOf(List.of(song1, song2));
+            verify(coverArtService).getMediaFileArts(Set.of(900));
+            verify(mediaFileService).getMediaFileStarredDates(List.of(song1, song2), "user");
+            verify(ratingService).getRatingsForUser("user", List.of(song1, song2));
+            verify(ratingService).getAverageRatings(List.of(song1, song2));
+            verify(albumService).getAlbumsByMediaFiles(List.of(song1, song2));
+            verify(artistService).getArtistsByName(Set.of("Artist A"));
+            // No per-child lookups.
+            verify(mediaFileService, never()).getParentOf(any());
+            verify(mediaFileService, never()).getMediaFileStarredDate(any(), any());
+            verify(ratingService, never()).getRatingForUser(any(), any());
+            verify(ratingService, never()).getAverageRating(any());
+            verify(albumService, never()).getAlbumByMediaFile(any());
+            verify(artistService, never()).getArtist(anyString());
         }
     }
 

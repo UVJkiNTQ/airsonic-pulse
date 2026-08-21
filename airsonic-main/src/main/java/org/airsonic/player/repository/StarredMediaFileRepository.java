@@ -40,6 +40,8 @@ public interface StarredMediaFileRepository extends JpaRepository<StarredMediaFi
 
     public Optional<StarredMediaFile> findByUsernameAndMediaFile(String username, MediaFile mediaFile);
 
+    public List<StarredMediaFile> findByUsernameAndMediaFileIn(String username, Iterable<MediaFile> mediaFiles);
+
     public List<StarredMediaFile> findByUsername(String username);
 
     public List<StarredMediaFile> findByUsernameAndMediaFileMediaTypeAndMediaFileFolderInAndMediaFilePresentTrue(

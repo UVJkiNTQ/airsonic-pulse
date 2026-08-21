@@ -19,7 +19,6 @@
  */
 package org.airsonic.player.controller;
 
-import org.airsonic.player.domain.Album;
 import org.airsonic.player.domain.MediaFile;
 import org.airsonic.player.domain.Player;
 import org.airsonic.player.domain.SearchCriteria;
@@ -37,6 +36,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.subsonic.restapi.AlbumID3;
 import org.subsonic.restapi.ArtistID3;
+import org.subsonic.restapi.Child;
 import org.subsonic.restapi.Response;
 import org.subsonic.restapi.SearchResult2;
 import org.subsonic.restapi.SearchResult3;
@@ -159,18 +159,14 @@ public class SubsonicSearchController extends AbstractSubsonicController {
         criteria.setCount(clampCount(getIntParameter(request, "albumCount", 20)));
         criteria.setOffset(clampOffset(getIntParameter(request, "albumOffset", 0)));
         org.airsonic.player.domain.SearchResult albums = searchService.search(criteria, musicFolders, IndexType.ALBUM);
-        for (MediaFile mediaFile : albums.getMediaFiles()) {
-            searchResult.getAlbum().add(jaxbContentService.createJaxbChild(player, mediaFile, username));
-        }
+        jaxbContentService.createJaxbChildren(player, albums.getMediaFiles(), username, mediaFile -> new Child())
+                .forEach(searchResult.getAlbum()::add);
 
         criteria.setCount(clampCount(getIntParameter(request, "songCount", 20)));
         criteria.setOffset(clampOffset(getIntParameter(request, "songOffset", 0)));
         org.airsonic.player.domain.SearchResult songs = searchService.search(criteria, musicFolders, IndexType.SONG);
-        for (MediaFile mediaFile : songs.getMediaFiles()) {
-            if (mediaFileService.showMediaFile(mediaFile)) {
-                searchResult.getSong().add(jaxbContentService.createJaxbChild(player, mediaFile, username));
-            }
-        }
+        jaxbContentService.createJaxbChildren(player, songs.getMediaFiles().stream().filter(mediaFileService::showMediaFile).toList(), username, mediaFile -> new Child())
+                .forEach(searchResult.getSong()::add);
 
         Response res = createResponse();
         res.setSearchResult2(searchResult);
@@ -198,13 +194,16 @@ public class SubsonicSearchController extends AbstractSubsonicController {
         int artistOffset = clampOffset(getIntParameter(request, "artistOffset", 0));
         if (StringUtils.isEmpty(query)) {
             if (artistCount > 0) {
-                artistService.getArtists(musicFolders, artistCount, artistOffset).forEach(artist -> searchResult.getArtist().add(jaxbContentService.createJaxbArtist(new ArtistID3(), artist, username)));
+                jaxbContentService.createJaxbArtists(artistService.getArtists(musicFolders, artistCount, artistOffset), username, artist -> new ArtistID3())
+                        .forEach(searchResult.getArtist()::add);
             }
             if (albumCount > 0) {
-                albumService.getAlbums(musicFolders, albumCount, albumOffset).forEach(album -> searchResult.getAlbum().add(jaxbContentService.createJaxbAlbum(new AlbumID3(), album, username)));
+                jaxbContentService.createJaxbAlbums(albumService.getAlbums(musicFolders, albumCount, albumOffset), username, album -> new AlbumID3())
+                        .forEach(searchResult.getAlbum()::add);
             }
             if (songCount > 0) {
-                mediaFileService.getSongs(musicFolders, songCount, songOffset).forEach(song -> searchResult.getSong().add(jaxbContentService.createJaxbChild(player, song, username)));
+                jaxbContentService.createJaxbChildren(player, mediaFileService.getSongs(musicFolders, songCount, songOffset), username, song -> new Child())
+                        .forEach(searchResult.getSong()::add);
             }
         } else {
             SearchCriteria criteria = new SearchCriteria();
@@ -212,25 +211,20 @@ public class SubsonicSearchController extends AbstractSubsonicController {
             criteria.setCount(artistCount);
             criteria.setOffset(artistOffset);
             org.airsonic.player.domain.SearchResult result = searchService.search(criteria, musicFolders, IndexType.ARTIST_ID3);
-            for (org.airsonic.player.domain.Artist artist : result.getArtists()) {
-                searchResult.getArtist().add(jaxbContentService.createJaxbArtist(new ArtistID3(), artist, username));
-            }
+            jaxbContentService.createJaxbArtists(result.getArtists(), username, artist -> new ArtistID3())
+                    .forEach(searchResult.getArtist()::add);
 
             criteria.setCount(albumCount);
             criteria.setOffset(albumOffset);
             result = searchService.search(criteria, musicFolders, IndexType.ALBUM_ID3);
-            for (Album album : result.getAlbums()) {
-                searchResult.getAlbum().add(jaxbContentService.createJaxbAlbum(new AlbumID3(), album, username));
-            }
+            jaxbContentService.createJaxbAlbums(result.getAlbums(), username, album -> new AlbumID3())
+                    .forEach(searchResult.getAlbum()::add);
 
             criteria.setCount(songCount);
             criteria.setOffset(songOffset);
             result = searchService.search(criteria, musicFolders, IndexType.SONG);
-            for (MediaFile song : result.getMediaFiles()) {
-                if (mediaFileService.showMediaFile(song)) {
-                    searchResult.getSong().add(jaxbContentService.createJaxbChild(player, song, username));
-                }
-            }
+            jaxbContentService.createJaxbChildren(player, result.getMediaFiles().stream().filter(mediaFileService::showMediaFile).toList(), username, song -> new Child())
+                    .forEach(searchResult.getSong()::add);
         }
 
         Response res = createResponse();

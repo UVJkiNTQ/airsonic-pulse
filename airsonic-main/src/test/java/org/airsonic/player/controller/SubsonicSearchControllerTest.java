@@ -22,6 +22,7 @@ import org.airsonic.player.domain.Player;
 import org.airsonic.player.domain.SearchCriteria;
 import org.airsonic.player.domain.SearchResult;
 import org.airsonic.player.service.JaxbContentService;
+import org.airsonic.player.service.MediaFileService;
 import org.airsonic.player.service.MediaFolderService;
 import org.airsonic.player.service.PlayerService;
 import org.airsonic.player.service.SearchService;
@@ -60,6 +61,8 @@ class SubsonicSearchControllerTest {
     @Mock
     private SearchService searchService;
     @Mock
+    private MediaFileService mediaFileService;
+    @Mock
     private MediaFolderService mediaFolderService;
     @Mock
     private SecurityService securityService;
@@ -79,6 +82,7 @@ class SubsonicSearchControllerTest {
     void setUp() throws Exception {
         controller = new SubsonicSearchController();
         ReflectionTestUtils.setField(controller, "searchService", searchService);
+        ReflectionTestUtils.setField(controller, "mediaFileService", mediaFileService);
         ReflectionTestUtils.setField(controller, "mediaFolderService", mediaFolderService);
         ReflectionTestUtils.setField(controller, "securityService", securityService);
         ReflectionTestUtils.setField(controller, "jaxbContentService", jaxbContentService);
@@ -90,7 +94,9 @@ class SubsonicSearchControllerTest {
         when(playerService.getPlayer(any(), any(), anyString())).thenReturn(new Player());
         when(mediaFolderService.getMusicFoldersForUser(anyString())).thenReturn(List.of());
         when(mediaFolderService.getMusicFoldersForUser(anyString(), any())).thenReturn(List.of());
+        when(mediaFileService.showMediaFile(any())).thenReturn(true);
         when(jaxbWriter.createResponse(anyBoolean())).thenReturn(new Response());
+        when(jaxbContentService.createJaxbChildren(any(), any(), anyString(), any())).thenReturn(List.of());
         when(searchService.search(any(SearchCriteria.class), any(), any())).thenAnswer(invocation -> {
             SearchCriteria c = invocation.getArgument(0);
             searchArgs.add(new int[] {c.getCount(), c.getOffset()});

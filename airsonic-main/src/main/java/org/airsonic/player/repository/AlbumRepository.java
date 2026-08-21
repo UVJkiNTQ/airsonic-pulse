@@ -21,6 +21,10 @@ public interface AlbumRepository extends JpaRepository<Album, Integer> {
 
     public Optional<Album> findByArtistAndName(String artist, String name);
 
+    public List<Album> findByIdInAndStarredAlbumsUsername(Iterable<Integer> ids, String username);
+
+    public List<Album> findByArtistInAndNameIn(Iterable<String> artists, Iterable<String> names);
+
     public List<Album> findByName(String artist);
 
     public List<Album> findByArtistAndFolderInAndPresentTrue(String artist, Iterable<MusicFolder> musicFolders);

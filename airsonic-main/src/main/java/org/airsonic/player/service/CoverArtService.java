@@ -29,7 +29,11 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 public class CoverArtService {
@@ -119,6 +123,19 @@ public class CoverArtService {
         return art;
     }
 
+    /**
+     * Batches the {@link #getAlbumArt(Integer)} lookup for a set of album ids into a single
+     * {@code IN} query. Ids with no cover art are absent from the map.
+     */
+    public Map<Integer, CoverArt> getAlbumArts(Collection<Integer> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return Map.of();
+        }
+        return coverArtRepository.findByEntityTypeAndEntityIdIn(EntityType.ALBUM, ids)
+                .stream()
+                .collect(Collectors.toMap(CoverArt::getEntityId, Function.identity(), (a, b) -> a));
+    }
+
     public CoverArt getArtistArt(Integer id) {
         CoverArt art = coverArtCache.getCoverArt(EntityType.ARTIST, id);
         if (art != null) {
@@ -129,6 +146,19 @@ public class CoverArtService {
         return art;
     }
 
+    /**
+     * Batches the {@link #getArtistArt(Integer)} lookup for a set of artist ids into a single
+     * {@code IN} query. Ids with no cover art are absent from the map.
+     */
+    public Map<Integer, CoverArt> getArtistArts(Collection<Integer> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return Map.of();
+        }
+        return coverArtRepository.findByEntityTypeAndEntityIdIn(EntityType.ARTIST, ids)
+                .stream()
+                .collect(Collectors.toMap(CoverArt::getEntityId, Function.identity(), (a, b) -> a));
+    }
+
     public CoverArt getMediaFileArt(@Param("id") int id) {
         CoverArt art = coverArtCache.getCoverArt(EntityType.MEDIA_FILE, id);
         if (art != null) {
@@ -137,6 +167,20 @@ public class CoverArtService {
         art = coverArtRepository.findByEntityTypeAndEntityId(EntityType.MEDIA_FILE, id).orElse(CoverArt.NULL_ART);
         coverArtCache.putCoverArt(art);
         return art;
+    }
+
+    /**
+     * Batches the {@link #getMediaFileArt(int)} lookup for a set of media file ids into a single
+     * {@code IN} query. Ids with no cover art are absent from the map (callers should treat them
+     * like {@link CoverArt#NULL_ART}).
+     */
+    public Map<Integer, CoverArt> getMediaFileArts(Collection<Integer> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return Map.of();
+        }
+        return coverArtRepository.findByEntityTypeAndEntityIdIn(EntityType.MEDIA_FILE, ids)
+                .stream()
+                .collect(Collectors.toMap(CoverArt::getEntityId, Function.identity(), (a, b) -> a));
     }
 
     @Nullable

@@ -417,6 +417,42 @@ public class MediaFileService {
     }
 
     /**
+     * Stable key identifying an (albumArtist, album) pair. Used to group batched track lookups so list
+     * endpoints can render a whole page of albums with a single query instead of an N+1 per-album
+     * {@link #getSongsForAlbum} round-trip (which made search3 / getAlbumList2 pages take seconds on
+     * large libraries).
+     */
+    public record AlbumKey(String albumArtist, String albumName) {
+        public static AlbumKey of(Album album) {
+            return new AlbumKey(album.getArtist(), album.getName());
+        }
+
+        public static AlbumKey of(MediaFile mediaFile) {
+            return new AlbumKey(mediaFile.getAlbumArtist(), mediaFile.getAlbumName());
+        }
+    }
+
+    /**
+     * Returns every track for the given albums in a single query, grouped by {@link AlbumKey}. Only
+     * present audio tracks are returned, matching {@link #getSongsForAlbum}. Albums without tracks
+     * simply have no entry in the map.
+     */
+    public Map<AlbumKey, List<MediaFile>> getSongsForAlbums(List<Album> albums) {
+        if (CollectionUtils.isEmpty(albums)) {
+            return Map.of();
+        }
+        Set<String> albumNames = albums.stream().map(Album::getName).filter(Objects::nonNull).collect(Collectors.toSet());
+        Set<String> artistNames = albums.stream().map(Album::getArtist).filter(Objects::nonNull).collect(Collectors.toSet());
+        if (albumNames.isEmpty()) {
+            return Map.of();
+        }
+        return mediaFileRepository
+                .findByAlbumArtistInAndAlbumNameInAndMediaTypeInAndPresentTrue(artistNames, albumNames, MediaType.audioTypes())
+                .stream()
+                .collect(Collectors.groupingBy(m -> new AlbumKey(m.getAlbumArtist(), m.getAlbumName())));
+    }
+
+    /**
      * Returns songs in a genre.
      *
      * @param offset      Number of songs to skip.
@@ -503,6 +539,23 @@ public class MediaFileService {
         }
         // return the first result
         return results.getFirst();
+    }
+
+    /**
+     * Batches {@link #getArtistByName(String, List)} for a whole page of artist names into a single
+     * query keyed by artist name. Artists with no directory media file are absent.
+     */
+    public Map<String, MediaFile> getArtistsByName(Collection<String> artistNames, List<MusicFolder> folders) {
+        if (CollectionUtils.isEmpty(folders) || artistNames == null || artistNames.isEmpty()) {
+            return Map.of();
+        }
+        Set<String> names = artistNames.stream().filter(Objects::nonNull).collect(Collectors.toSet());
+        if (names.isEmpty()) {
+            return Map.of();
+        }
+        return mediaFileRepository.findByFolderInAndMediaTypeAndArtistInAndPresentTrue(folders, MediaType.DIRECTORY, names)
+                .stream()
+                .collect(Collectors.toMap(MediaFile::getArtist, Function.identity(), (a, b) -> a));
     }
 
     /**
@@ -747,15 +800,64 @@ public class MediaFileService {
         return starredMediaFileRepository.findByUsernameAndMediaFile(username, mediaFile).map(StarredMediaFile::getCreated).orElse(null);
     }
 
+    /**
+     * Batches {@link #getMediaFileStarredDate(MediaFile, String)} for a whole page of media files into a
+     * single {@code IN} query keyed by media file id. Files that are not starred are absent.
+     */
+    public Map<Integer, Instant> getMediaFileStarredDates(List<MediaFile> mediaFiles, String username) {
+        if (mediaFiles == null || mediaFiles.isEmpty()) {
+            return Map.of();
+        }
+        return starredMediaFileRepository
+                .findByUsernameAndMediaFileIn(username, mediaFiles)
+                .stream()
+                .collect(Collectors.toMap(smf -> smf.getMediaFile().getId(), StarredMediaFile::getCreated, (a, b) -> a));
+    }
+
     public void populateStarredDate(List<MediaFile> mediaFiles, String username) {
+        if (mediaFiles == null || mediaFiles.isEmpty()) {
+            return;
+        }
+        Map<MediaFile, Instant> byMediaFile = starredMediaFileRepository
+                .findByUsernameAndMediaFileIn(username, mediaFiles)
+                .stream()
+                .collect(Collectors.toMap(StarredMediaFile::getMediaFile, StarredMediaFile::getCreated, (a, b) -> a));
         for (MediaFile mediaFile : mediaFiles) {
-            populateStarredDate(mediaFile, username);
+            mediaFile.setStarredDate(byMediaFile.get(mediaFile));
         }
     }
 
     public void populateStarredDate(MediaFile mediaFile, String username) {
         Instant starredDate = starredMediaFileRepository.findByUsernameAndMediaFile(username, mediaFile).map(StarredMediaFile::getCreated).orElse(null);
         mediaFile.setStarredDate(starredDate);
+    }
+
+    /**
+     * Batches the {@code getParentOf} lookup for a whole page of media files into a handful of
+     * {@code IN} queries (one per distinct music folder) instead of one round-trip per file. Files
+     * whose parent cannot be resolved are simply absent from the returned map.
+     */
+    public Map<MediaFile, MediaFile> getParentsOf(List<MediaFile> mediaFiles) {
+        if (mediaFiles == null || mediaFiles.isEmpty()) {
+            return Map.of();
+        }
+        Map<MediaFile, MediaFile> result = new HashMap<>();
+        mediaFiles.stream()
+                .filter(mf -> mf.getParentPath() != null)
+                .collect(Collectors.groupingBy(MediaFile::getFolder))
+                .forEach((folder, files) -> {
+                    Set<String> parentPaths = files.stream().map(MediaFile::getParentPath).collect(Collectors.toSet());
+                    Map<String, MediaFile> byPath = mediaFileRepository.findByFolderAndPathIn(folder, parentPaths)
+                            .stream()
+                            .collect(Collectors.toMap(MediaFile::getPath, Function.identity(), (a, b) -> a));
+                    files.forEach(mf -> {
+                        MediaFile parent = byPath.get(mf.getParentPath());
+                        if (parent != null) {
+                            result.put(mf, parent);
+                        }
+                    });
+                });
+        return result;
     }
 
     @Nullable

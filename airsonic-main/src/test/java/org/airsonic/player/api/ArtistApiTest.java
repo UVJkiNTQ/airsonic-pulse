@@ -177,8 +177,8 @@ public class ArtistApiTest {
                 .thenReturn(List.of(testAlbum));
         when(jaxbContentService.createJaxbArtist(any(ArtistID3.class), eq(artist), eq(AIRSONIC_USER)))
                 .thenReturn(TestApiUtil.createTestArtistWithAlbumsID3Full(artist.getName()));
-        when(jaxbContentService.createJaxbAlbum(any(AlbumID3.class), eq(testAlbum), eq(AIRSONIC_USER)))
-                .thenReturn(TestApiUtil.createTestAlbumID3());
+        when(jaxbContentService.createJaxbAlbums(any(), eq(AIRSONIC_USER), any()))
+                .thenReturn(List.of(TestApiUtil.createTestAlbumID3()));
 
         String responseBody = mvc.perform(get(endpoint)
                 .param("v", AIRSONIC_API_VERSION)

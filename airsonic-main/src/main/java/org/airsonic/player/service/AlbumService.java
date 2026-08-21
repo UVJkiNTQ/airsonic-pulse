@@ -15,10 +15,16 @@ import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 @Service
 public class AlbumService {
@@ -66,6 +72,27 @@ public class AlbumService {
             return null;
         }
         return albumRepository.findByArtistAndName(mediaFile.getAlbumArtist(), mediaFile.getAlbumName()).orElse(null);
+    }
+
+    /**
+     * Batches {@link #getAlbumByMediaFile(MediaFile)} for a whole page of media files into a single
+     * {@code IN} query keyed by {@link MediaFileService.AlbumKey}. Files whose album cannot be
+     * resolved are absent from the map.
+     */
+    public Map<MediaFileService.AlbumKey, Album> getAlbumsByMediaFiles(Collection<MediaFile> mediaFiles) {
+        if (mediaFiles == null || mediaFiles.isEmpty()) {
+            return Map.of();
+        }
+        Set<String> artists = mediaFiles.stream().map(MediaFile::getAlbumArtist).filter(Objects::nonNull).collect(Collectors.toSet());
+        Set<String> names = mediaFiles.stream().map(MediaFile::getAlbumName).filter(Objects::nonNull).collect(Collectors.toSet());
+        if (artists.isEmpty() || names.isEmpty()) {
+            return Map.of();
+        }
+        Map<MediaFileService.AlbumKey, Album> byKey = new HashMap<>();
+        for (Album album : albumRepository.findByArtistInAndNameIn(artists, names)) {
+            byKey.putIfAbsent(new MediaFileService.AlbumKey(album.getArtist(), album.getName()), album);
+        }
+        return byKey;
     }
 
     /**
@@ -284,6 +311,21 @@ public class AlbumService {
         return albumRepository.findByIdAndStarredAlbumsUsername(albumId, username)
                 .map(album -> album.getStarredAlbums().isEmpty() ? null : album.getStarredAlbums().get(0).getCreated())
                 .orElse(null);
+    }
+
+    /**
+     * Batches {@link #getAlbumStarredDate(Integer, String)} for a whole page of albums into a single
+     * {@code IN} query keyed by album id. Albums that are not starred are absent.
+     */
+    @Transactional(readOnly = true)
+    public Map<Integer, Instant> getAlbumStarredDates(Collection<Integer> albumIds, String username) {
+        if (albumIds == null || albumIds.isEmpty() || !StringUtils.hasLength(username)) {
+            return Map.of();
+        }
+        return albumRepository.findByIdInAndStarredAlbumsUsername(albumIds, username)
+                .stream()
+                .filter(a -> !a.getStarredAlbums().isEmpty())
+                .collect(Collectors.toMap(Album::getId, a -> a.getStarredAlbums().get(0).getCreated(), (x, y) -> x));
     }
 
     /**

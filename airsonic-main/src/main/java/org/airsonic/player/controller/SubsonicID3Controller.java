@@ -116,9 +116,8 @@ public class SubsonicID3Controller extends AbstractSubsonicController {
 
         List<org.airsonic.player.domain.MusicFolder> musicFolders = mediaFolderService.getMusicFoldersForUser(username);
         ArtistWithAlbumsID3 result = jaxbContentService.createJaxbArtist(new ArtistWithAlbumsID3(), artist, username);
-        for (Album album : albumService.getAlbumsByArtist(artist.getName(), musicFolders)) {
-            result.getAlbum().add(jaxbContentService.createJaxbAlbum(new AlbumID3(), album, username));
-        }
+        jaxbContentService.createJaxbAlbums(albumService.getAlbumsByArtist(artist.getName(), musicFolders), username, album -> new AlbumID3())
+                .forEach(result.getAlbum()::add);
 
         Response res = createResponse();
         res.setArtist(result);
@@ -210,9 +209,8 @@ public class SubsonicID3Controller extends AbstractSubsonicController {
             throw new SubsonicRESTController.APIException(SubsonicRESTController.ErrorCode.GENERIC, "Invalid list type: " + type);
         }
         AlbumList2 result = new AlbumList2();
-        for (Album album : albums) {
-            result.getAlbum().add(jaxbContentService.createJaxbAlbum(new AlbumID3(), album, username));
-        }
+        jaxbContentService.createJaxbAlbums(albums, username, album -> new AlbumID3())
+                .forEach(result.getAlbum()::add);
         Response res = createResponse();
         res.setAlbumList2(result);
         jaxbWriter.writeResponse(request, response, res);

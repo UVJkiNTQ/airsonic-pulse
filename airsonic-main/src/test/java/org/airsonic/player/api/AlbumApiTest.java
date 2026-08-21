@@ -782,8 +782,8 @@ public class AlbumApiTest {
         when(albumService.getMostFrequentlyPlayedAlbums(eq(0), eq(10), eq(List.of(testFolder))))
             .thenReturn(List.of(album));
         AlbumID3 testJaxbAlbum = TestApiUtil.createTestAlbumID3();
-        when(jaxbContentService.createJaxbAlbum(any(), eq(album), eq(AIRSONIC_USER)))
-            .thenReturn(testJaxbAlbum);
+        when(jaxbContentService.createJaxbAlbums(any(), eq(AIRSONIC_USER), any()))
+            .thenReturn(List.of(testJaxbAlbum));
 
         String response = mvc.perform(get(endpoint)
                 .param("type", "frequent")
@@ -819,8 +819,8 @@ public class AlbumApiTest {
         when(albumService.getMostResentlyPlayedAlbums(eq(0), eq(10), eq(List.of(testFolder))))
             .thenReturn(List.of(album));
         AlbumID3 testJaxbAlbum = TestApiUtil.createTestAlbumID3();
-        when(jaxbContentService.createJaxbAlbum(any(), eq(album), eq(AIRSONIC_USER)))
-            .thenReturn(testJaxbAlbum);
+        when(jaxbContentService.createJaxbAlbums(any(), eq(AIRSONIC_USER), any()))
+            .thenReturn(List.of(testJaxbAlbum));
 
         String response = mvc.perform(get(endpoint)
                 .param("type", "recent")
@@ -856,8 +856,8 @@ public class AlbumApiTest {
         when(albumService.getRecentlyAddedAlbums(eq(0), eq(10), eq(List.of(testFolder))))
             .thenReturn(List.of(album));
         AlbumID3 testJaxbAlbum = TestApiUtil.createTestAlbumID3();
-        when(jaxbContentService.createJaxbAlbum(any(), eq(album), eq(AIRSONIC_USER)))
-            .thenReturn(testJaxbAlbum);
+        when(jaxbContentService.createJaxbAlbums(any(), eq(AIRSONIC_USER), any()))
+            .thenReturn(List.of(testJaxbAlbum));
 
         String response = mvc.perform(get(endpoint)
                 .param("type", "newest")
@@ -893,8 +893,8 @@ public class AlbumApiTest {
         when(albumService.getAlphabeticalAlbums(eq(0), eq(10), eq(true), eq(false), eq(List.of(testFolder))))
             .thenReturn(List.of(album));
         AlbumID3 testJaxbAlbum = TestApiUtil.createTestAlbumID3();
-        when(jaxbContentService.createJaxbAlbum(any(), eq(album), eq(AIRSONIC_USER)))
-            .thenReturn(testJaxbAlbum);
+        when(jaxbContentService.createJaxbAlbums(any(), eq(AIRSONIC_USER), any()))
+            .thenReturn(List.of(testJaxbAlbum));
 
         String response = mvc.perform(get(endpoint)
                 .param("type", "alphabeticalByArtist")
@@ -930,8 +930,8 @@ public class AlbumApiTest {
         when(albumService.getAlphabeticalAlbums(eq(0), eq(10), eq(false), eq(false), eq(List.of(testFolder))))
             .thenReturn(List.of(album));
         AlbumID3 testJaxbAlbum = TestApiUtil.createTestAlbumID3();
-        when(jaxbContentService.createJaxbAlbum(any(), eq(album), eq(AIRSONIC_USER)))
-            .thenReturn(testJaxbAlbum);
+        when(jaxbContentService.createJaxbAlbums(any(), eq(AIRSONIC_USER), any()))
+            .thenReturn(List.of(testJaxbAlbum));
 
         String response = mvc.perform(get(endpoint)
                 .param("type", "alphabeticalByName")
@@ -968,8 +968,8 @@ public class AlbumApiTest {
         when(albumService.getAlbumsByGenre(eq(0), eq(10), eq(genre), eq(List.of(testFolder))))
             .thenReturn(List.of(album));
         AlbumID3 testJaxbAlbum = TestApiUtil.createTestAlbumID3();
-        when(jaxbContentService.createJaxbAlbum(any(), eq(album), eq(AIRSONIC_USER)))
-            .thenReturn(testJaxbAlbum);
+        when(jaxbContentService.createJaxbAlbums(any(), eq(AIRSONIC_USER), any()))
+            .thenReturn(List.of(testJaxbAlbum));
 
         String response = mvc.perform(get(endpoint)
                 .param("type", "byGenre")
@@ -1008,8 +1008,8 @@ public class AlbumApiTest {
         when(albumService.getAlbumsByYear(eq(0), eq(10), eq(fromYear), eq(toYear), eq(List.of(testFolder))))
             .thenReturn(List.of(album));
         AlbumID3 testJaxbAlbum = TestApiUtil.createTestAlbumID3();
-        when(jaxbContentService.createJaxbAlbum(any(), eq(album), eq(AIRSONIC_USER)))
-            .thenReturn(testJaxbAlbum);
+        when(jaxbContentService.createJaxbAlbums(any(), eq(AIRSONIC_USER), any()))
+            .thenReturn(List.of(testJaxbAlbum));
 
         String response = mvc.perform(get(endpoint)
                 .param("type", "byYear")
@@ -1047,8 +1047,8 @@ public class AlbumApiTest {
         when(albumService.getStarredAlbums(eq(0), eq(10), eq(AIRSONIC_USER), eq(List.of(testFolder))))
             .thenReturn(List.of(album));
         AlbumID3 testJaxbAlbum = TestApiUtil.createTestAlbumID3();
-        when(jaxbContentService.createJaxbAlbum(any(), eq(album), eq(AIRSONIC_USER)))
-            .thenReturn(testJaxbAlbum);
+        when(jaxbContentService.createJaxbAlbums(any(), eq(AIRSONIC_USER), any()))
+            .thenReturn(List.of(testJaxbAlbum));
 
         String response = mvc.perform(get(endpoint)
                 .param("type", "starred")
@@ -1084,8 +1084,8 @@ public class AlbumApiTest {
         when(searchService.getRandomAlbumsId3(eq(10), eq(List.of(testFolder))))
             .thenReturn(List.of(album));
         AlbumID3 testJaxbAlbum = TestApiUtil.createTestAlbumID3();
-        when(jaxbContentService.createJaxbAlbum(any(), eq(album), eq(AIRSONIC_USER)))
-            .thenReturn(testJaxbAlbum);
+        when(jaxbContentService.createJaxbAlbums(any(), eq(AIRSONIC_USER), any()))
+            .thenReturn(List.of(testJaxbAlbum));
 
         String response = mvc.perform(get(endpoint)
                 .param("type", "random")
@@ -1156,8 +1156,8 @@ public class AlbumApiTest {
         when(albumService.getMostFrequentlyPlayedAlbums(eq(0), eq(500), eq(List.of(testFolder))))
             .thenReturn(List.of(album));
         AlbumID3 testJaxbAlbum = TestApiUtil.createTestAlbumID3();
-        when(jaxbContentService.createJaxbAlbum(any(), eq(album), eq(AIRSONIC_USER)))
-            .thenReturn(testJaxbAlbum);
+        when(jaxbContentService.createJaxbAlbums(any(), eq(AIRSONIC_USER), any()))
+            .thenReturn(List.of(testJaxbAlbum));
 
         String response = mvc.perform(get(endpoint)
                 .param("type", "frequent")

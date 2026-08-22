@@ -439,4 +439,34 @@ public class FFmpegParserTestCase {
         JsonNode node = probeJson(tags());
         assertNull(FFmpegParser.getDataAny(node, "k1", "k2"));
     }
+
+    // ----- AAC container (jaudiotagger 3.0.1 has no AAC reader) -----
+
+    /**
+     * AAC files route through FFmpegParser (see MetaDataParserFactoryTest
+     * {@code testAacRoutesToFFmpegBecauseJaudiotagger301HasNoAacReader}). This locks the
+     * scalar extraction for the shape ffprobe returns for a real .aac — an MP4/M4A container
+     * (format_name mov,mp4,m4a,3gp,3g2,mj2) with duration in the format block. Previously
+     * these files went to JaudiotaggerParser and threw
+     * {@code CannotReadException: No Reader associated with this extension:aac}, leaving
+     * duration/bit_rate NULL in the DB.
+     */
+    @Test
+    public void testDurationAndBitRateFromAacFfprobeShape() {
+        MetaData metaData = new MetaData();
+        Map<String, Object> root = new LinkedHashMap<>();
+        Map<String, Object> format = new LinkedHashMap<>();
+        // Values observed from a real FELT Sevens Head Postcard .aac via ffprobe.
+        format.put("duration", "114.816000");
+        format.put("bit_rate", "16551");
+        Map<String, Object> tags = new LinkedHashMap<>();
+        tags.put("comment", "FlixEngine_8.1.0.2");
+        format.put("tags", tags);
+        root.put("format", format);
+        new FFmpegParser().populateFromJson(mapper.valueToTree(root), metaData);
+
+        assertEquals(Double.valueOf(114.816), metaData.getDuration());
+        // bit_rate is stored in Kb/s (raw 16551 b/s → 16).
+        assertEquals(Integer.valueOf(16), metaData.getBitRate());
+    }
 }

@@ -529,11 +529,13 @@ public class JaudiotaggerParser extends MetaDataParser {
         return true;
     }
 
-    private static Set<String> imageAvailableFormats = ImmutableSet.of("mp3", "m4a", "m4b", "m4p", "aac", "ogg", "flac", "wav", "aif", "dsf", "aiff", "wma");
-    // "opus" intentionally NOT included — jaudiotagger 3.0.1 has no Opus reader
-    // (no OPUS entry in SupportedFileFormat; no reader registered for .opus).
-    // Opus R128 support is wired through FFmpegParser instead — see #258 and #226 PR1.
-    private static Set<String> applicableFormats = ImmutableSet.of("mp3", "m4a", "m4b", "m4p", "aac", "ogg", "flac", "wav", "aif", "dsf", "aiff", "wma");
+    private static Set<String> imageAvailableFormats = ImmutableSet.of("mp3", "m4a", "m4b", "m4p", "ogg", "flac", "wav", "aif", "dsf", "aiff", "wma");
+    // "opus" and "aac" intentionally NOT included — jaudiotagger 3.0.1 has no
+    // Opus or AAC reader (no OPUS/AAC entries in SupportedFileFormat; no reader
+    // registered for .opus/.aac). Opus R128 support is wired through FFmpegParser
+    // instead — see #258 and #226 PR1. AAC metadata is parsed via FFmpegParser too,
+    // otherwise the scanner fails with "No Reader associated with this extension:aac".
+    private static Set<String> applicableFormats = ImmutableSet.of("mp3", "m4a", "m4b", "m4p", "ogg", "flac", "wav", "aif", "dsf", "aiff", "wma");
 
     /**
      * Returns whether this parser is applicable to the given file.

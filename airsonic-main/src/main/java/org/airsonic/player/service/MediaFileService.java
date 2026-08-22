@@ -935,7 +935,22 @@ public class MediaFileService {
                 // materialise that block's tracks against it (multifile CUE support).
                 return cueSheet.getFileData().stream().flatMap(fileData -> {
                     String filePath = fileData.getFile();
+                    // Prefer a bare-name match (existing behaviour: single-file CUE albums whose
+                    // FILE block names the sibling audio file in the same directory).
                     MediaFile base = bareFiles.remove(FilenameUtils.getName(filePath));
+
+                    if (Objects.isNull(base)) {
+                        // Fall back to resolving the FILE block's path relative to the CUE's parent
+                        // directory. Many multi-disc albums (disc 1/01 … .flac) reference audio files in
+                        // subdirectories, which are never direct children of the parent and therefore
+                        // absent from `bareFiles`. getMediaFile resolves DB + disk (and creates the
+                        // MediaFile row if needed), so those bases index correctly too.
+                        Path baseRelative = Paths.get(parent.getPath()).resolve(filePath).normalize();
+                        base = getMediaFile(baseRelative, folder);
+                        if (Objects.nonNull(base)) {
+                            bareFiles.remove(FilenameUtils.getName(base.getPath()));
+                        }
+                    }
 
                     if (Objects.nonNull(base)) {
                         base.setIndexPath(indexPath); // update indexPath in mediaFile

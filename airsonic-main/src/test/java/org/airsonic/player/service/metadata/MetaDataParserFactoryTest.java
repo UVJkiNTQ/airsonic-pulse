@@ -53,7 +53,7 @@ public class MetaDataParserFactoryTest {
         // The null MediaFolderService is intentional: only isApplicable and getRawMetaData
         // are exercised here, neither of which touches the folder service.
         factory = new MetaDataParserFactory(List.of(
-                new JaudiotaggerParser(null),
+                new JaudiotaggerParser(null, null),
                 new FFmpegParser()));
     }
 

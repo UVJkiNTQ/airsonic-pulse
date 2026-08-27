@@ -124,8 +124,11 @@ public class JaudiotaggerParser extends MetaDataParser {
     @Autowired
     private MediaFolderService mediaFolderService;
 
-    public JaudiotaggerParser(MediaFolderService mediaFolderService) {
+    private final FFmpegParser ffmpegParser;
+
+    public JaudiotaggerParser(MediaFolderService mediaFolderService, FFmpegParser ffmpegParser) {
         this.mediaFolderService = mediaFolderService;
+        this.ffmpegParser = ffmpegParser;
     }
 
     static {
@@ -207,7 +210,14 @@ public class JaudiotaggerParser extends MetaDataParser {
 
 
         } catch (Throwable x) {
-            LOG.warn("Error when parsing tags in {}", file, x);
+            LOG.warn("Error when parsing tags in {} (falling back to ffmpeg metadata)", file, x);
+            // jaudiotagger cannot read every file — e.g. its WavTagReader throws
+            // java.nio.BufferUnderflowException on otherwise-valid WAVs that carry no
+            // LIST/INFO tag chunk, which would otherwise lose duration/bitrate entirely.
+            // Fall back to ffprobe so the audio header (and any tags it can see) still land.
+            if (ffmpegParser != null) {
+                return ffmpegParser.getRawMetaData(file);
+            }
         }
 
         return metaData;

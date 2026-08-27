@@ -107,6 +107,7 @@ public class SubsonicID3Controller extends AbstractSubsonicController {
         request = wrapRequest(request);
 
         String username = securityService.getCurrentUsername(request);
+        Player player = playerService.getPlayer(request, response, username);
         int id = getRequiredIntParameter(request, "id");
         org.airsonic.player.domain.Artist artist = artistService.getArtist(id);
         if (artist == null) {
@@ -116,7 +117,9 @@ public class SubsonicID3Controller extends AbstractSubsonicController {
 
         List<org.airsonic.player.domain.MusicFolder> musicFolders = mediaFolderService.getMusicFoldersForUser(username);
         ArtistWithAlbumsID3 result = jaxbContentService.createJaxbArtist(new ArtistWithAlbumsID3(), artist, username);
-        jaxbContentService.createJaxbAlbums(albumService.getAlbumsByArtist(artist.getName(), musicFolders), username, album -> new AlbumID3())
+        // OpenSubsonic extension: albums carry their <song> entries (AlbumID3.song), so the whole
+        // discography track list arrives in this single response — no per-album getAlbum round-trips.
+        jaxbContentService.createJaxbAlbums(player, albumService.getAlbumsByArtist(artist.getName(), musicFolders), username, album -> new AlbumID3())
                 .forEach(result.getAlbum()::add);
 
         Response res = createResponse();

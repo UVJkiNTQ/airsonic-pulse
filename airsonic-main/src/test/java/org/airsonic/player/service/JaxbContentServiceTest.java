@@ -276,6 +276,63 @@ class JaxbContentServiceTest {
         }
 
         @Test
+        void createJaxbAlbums_withPlayer_populatesSongsForEachAlbum() {
+            Album album1 = mock(Album.class);
+            Album album2 = mock(Album.class);
+            when(album1.getId()).thenReturn(1);
+            when(album1.getName()).thenReturn("Album A");
+            when(album1.getArtist()).thenReturn("Artist A");
+            when(album2.getId()).thenReturn(2);
+            when(album2.getName()).thenReturn("Album B");
+            when(album2.getArtist()).thenReturn("Artist B");
+            when(coverArtService.getAlbumArts(Set.of(1, 2))).thenReturn(Map.of(1, coverArt, 2, coverArt));
+            when(artistService.getArtistsByName(Set.of("Artist A", "Artist B"))).thenReturn(Map.of());
+            when(albumService.getAlbumStarredDates(Set.of(1, 2), "user")).thenReturn(Map.of());
+
+            MediaFile trackA = mockTrack(1, "Track A", "Artist A", "Album A");
+            MediaFile trackB = mockTrack(2, "Track B", "Artist B", "Album B");
+            when(mediaFileService.getSongsForAlbums(List.of(album1, album2)))
+                    .thenReturn(Map.of(
+                            new MediaFileService.AlbumKey("Artist A", "Album A"), List.of(trackA),
+                            new MediaFileService.AlbumKey("Artist B", "Album B"), List.of(trackB)));
+
+            List<AlbumID3> result = service.createJaxbAlbums(mock(Player.class), List.of(album1, album2), "user", a -> new AlbumID3());
+
+            assertEquals(2, result.size());
+            assertEquals(1, result.get(0).getSong().size());
+            assertEquals("Track A", result.get(0).getSong().get(0).getTitle());
+            assertEquals(1, result.get(1).getSong().size());
+            assertEquals("Track B", result.get(1).getSong().get(0).getTitle());
+            // Child rendering uses one shared context for the whole page, never a per-child parent lookup.
+            verify(mediaFileService, never()).getParentOf(any());
+        }
+
+        private MediaFile mockTrack(int id, String name, String artist, String albumName) {
+            MediaFile t = mock(MediaFile.class);
+            when(t.getId()).thenReturn(id);
+            when(t.getName()).thenReturn(name);
+            when(t.getAlbumName()).thenReturn(albumName);
+            when(t.getArtist()).thenReturn(artist);
+            when(t.getAlbumArtist()).thenReturn(artist);
+            when(t.isDirectory()).thenReturn(false);
+            when(t.isFile()).thenReturn(true);
+            when(t.getMediaType()).thenReturn(org.airsonic.player.domain.MediaFile.MediaType.MUSIC);
+            when(t.getDuration()).thenReturn(240.0);
+            when(t.getTrackNumber()).thenReturn(1);
+            when(t.getDiscNumber()).thenReturn(1);
+            when(t.getFileSize()).thenReturn(0L);
+            when(t.getFormat()).thenReturn("flac");
+            when(t.getGenre()).thenReturn("Rock");
+            when(t.getGenres()).thenReturn("Rock");
+            when(t.getContributors()).thenReturn("");
+            when(t.getCreated()).thenReturn(Instant.now());
+            when(t.getSortName()).thenReturn(name.toLowerCase());
+            when(t.getPlayCount()).thenReturn(0);
+            when(t.getPath()).thenReturn("/music/" + name + ".flac");
+            return t;
+        }
+
+        @Test
         void createJaxbAlbum_noArtistOrCoverArt() {
             AlbumID3 jaxbAlbum = new AlbumID3();
             when(album.getId()).thenReturn(2);

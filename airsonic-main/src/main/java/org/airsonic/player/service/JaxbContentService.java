@@ -272,6 +272,40 @@ public class JaxbContentService {
                 .toList();
     }
 
+    /**
+     * Variant of {@link #createJaxbAlbums(List, String, Function)} that also populates each album's {@code <song>}
+     * entries (used by /getArtist so a client can fetch an artist's whole discography track list in a single request).
+     * Songs reuse the single batched track lookup from {@link #preloadAlbumContext} plus ONE shared child-render
+     * context, so the entire artist renders in a handful of queries regardless of album count. List endpoints that do
+     * not need songs keep using the 3-arg overload.
+     */
+    public <T extends AlbumID3> List<T> createJaxbAlbums(Player player, List<Album> albums, String username, Function<Album, T> factory) {
+        if (albums == null || albums.isEmpty()) {
+            return List.of();
+        }
+        AlbumRenderContext ctx = preloadAlbumContext(albums, username);
+        List<MediaFile> allTracks = albums.stream()
+                .map(a -> ctx.tracksByAlbum.get(MediaFileService.AlbumKey.of(a)))
+                .filter(Objects::nonNull)
+                .flatMap(List::stream)
+                .toList();
+        ChildRenderContext childCtx = allTracks.isEmpty() ? null : preloadChildContext(allTracks, username);
+        return albums.stream()
+                .map(a -> {
+                    T jaxbAlbum = createJaxbAlbum(factory.apply(a), a, username, ctx.tracksByAlbum.get(MediaFileService.AlbumKey.of(a)), ctx);
+                    if (player != null) {
+                        List<MediaFile> albumTracks = ctx.tracksByAlbum.get(MediaFileService.AlbumKey.of(a));
+                        if (albumTracks != null) {
+                            for (MediaFile mf : albumTracks) {
+                                jaxbAlbum.getSong().add(createJaxbChild(new Child(), player, mf, username, childCtx));
+                            }
+                        }
+                    }
+                    return jaxbAlbum;
+                })
+                .toList();
+    }
+
     private AlbumRenderContext preloadAlbumContext(List<Album> albums, String username) {
         Map<MediaFileService.AlbumKey, List<MediaFile>> tracksByAlbum = mediaFileService.getSongsForAlbums(albums);
         Set<Integer> ids = albums.stream().map(Album::getId).filter(Objects::nonNull).collect(Collectors.toSet());

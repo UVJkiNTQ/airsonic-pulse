@@ -118,9 +118,20 @@ public class FFmpegParser extends MetaDataParser {
      * {@code getRawMetaData} adds on top.
      */
     void populateFromJson(JsonNode result, MetaData metaData) {
-        metaData.setDuration(result.at("/format/duration").asDouble());
+        // Only populate duration/bitrate when ffprobe actually produced them. ffprobe emits an empty
+        // JSON object ({}) with exit 0 for unparseable input (e.g. junk bytes saved as .mp3), and
+        // MissingNode.asDouble()/asInt() silently return 0 — which would make a garbage download look
+        // like a valid 0-second file and, in the podcast pipeline, mark the episode COMPLETED instead
+        // of ERROR. Leaving them null keeps "could not determine duration" semantics intact.
+        JsonNode durationNode = result.at("/format/duration");
+        if (!durationNode.isMissingNode() && !durationNode.isNull()) {
+            metaData.setDuration(durationNode.asDouble());
+        }
         // Bitrate is in Kb/s
-        metaData.setBitRate(result.at("/format/bit_rate").asInt() / 1000);
+        JsonNode bitRateNode = result.at("/format/bit_rate");
+        if (!bitRateNode.isMissingNode() && !bitRateNode.isNull()) {
+            metaData.setBitRate(bitRateNode.asInt() / 1000);
+        }
 
         // Vorbis comments (FLAC/OGG/Opus) use the no-separator canonical key ALBUMARTIST;
         // ID3v2 TPE2 and MP4 aART are normalized to album_artist by ffprobe. APEv2

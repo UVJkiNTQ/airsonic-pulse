@@ -469,4 +469,20 @@ public class FFmpegParserTestCase {
         // bit_rate is stored in Kb/s (raw 16551 b/s → 16).
         assertEquals(Integer.valueOf(16), metaData.getBitRate());
     }
+
+    /**
+     * ffprobe returns an empty JSON object ({}) with exit 0 when it cannot parse the input at all
+     * (e.g. junk bytes saved with a .mp3 name). Those shapes must leave duration/bit_rate null —
+     * previously MissingNode.asDouble()/asInt() fabricated 0.0/0, which made the podcast pipeline
+     * treat an unparseable download as a valid 0-second file and mark the episode COMPLETED.
+     */
+    @Test
+    public void testUnparseableInputLeavesDurationNull() {
+        MetaData metaData = new MetaData();
+        // {} — exactly what `ffprobe -v quiet -print_format json -show_format` emits for non-audio bytes.
+        new FFmpegParser().populateFromJson(mapper.valueToTree(Map.of()), metaData);
+
+        assertNull(metaData.getDuration());
+        assertNull(metaData.getBitRate());
+    }
 }

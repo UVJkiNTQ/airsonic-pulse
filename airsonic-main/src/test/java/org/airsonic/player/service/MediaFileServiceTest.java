@@ -354,6 +354,23 @@ public class MediaFileServiceTest {
         assertEquals(25.0d, actual.get(0).getDuration(), 0.001d);
     }
 
+    // Backslash path normalization in CUE FILE references (Windows-authored cue sheets). Without
+    // it, a reference like "disc 1\\01-Track.flac" is resolved as a literal filename on POSIX and
+    // the base file is never found ("Could not find base file ...").
+    @Test
+    public void normalizeCueFilePathConvertsBackslashesToForwardSlashes() {
+        assertEquals("disc 1/01-Track.flac", MediaFileService.normalizeCueFilePath("disc 1\\01-Track.flac"));
+        assertEquals("album/[ORT]/01-Song.flac", MediaFileService.normalizeCueFilePath("album/[ORT]\\01-Song.flac"));
+        assertEquals("輝く世界の魔法 (M@STER VERSION) [ORT]/01-輝く世界の魔法 (M@STER VERSION) [ORT].flac",
+                MediaFileService.normalizeCueFilePath("輝く世界の魔法 (M@STER VERSION) [ORT]\\01-輝く世界の魔法 (M@STER VERSION) [ORT].flac"));
+    }
+
+    @Test
+    public void normalizeCueFilePathLeavesForwardSlashPathsUntouched() {
+        assertEquals("disc 1/01-Track.flac", MediaFileService.normalizeCueFilePath("disc 1/01-Track.flac"));
+        assertEquals("01-Track.flac", MediaFileService.normalizeCueFilePath("01-Track.flac"));
+    }
+
     private MediaFile cueBase() {
         MediaFile base = new MediaFile();
         base.setIndexPath("cue/airsonic-test.cue");

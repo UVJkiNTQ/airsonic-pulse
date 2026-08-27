@@ -29,6 +29,7 @@ import org.airsonic.player.service.*;
 import org.airsonic.player.util.FileUtil;
 import org.airsonic.player.util.ImageUtil;
 import org.airsonic.player.util.StringUtil;
+import org.airsonic.player.util.Util;
 import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.io.IOUtils;
@@ -151,10 +152,27 @@ public class CoverArtController {
             Path cachedImage = getCachedImage(coverArtRequest, size);
             sendImage(cachedImage, response);
         } catch (Exception e) {
+            if (isClientAbort(e)) {
+                // Client disconnected (e.g. cover art streaming from a slow network mount such as an
+                // rclone folder). The response is already unusable, so there is nothing to write and no
+                // fallback image to send — return quietly instead of letting a full ERROR stack escape.
+                LOG.debug("Client disconnected during cover art delivery", e);
+                return;
+            }
             LOG.debug("Sending fallback as an exception was encountered during normal cover art processing", e);
             sendFallback(size, response);
         }
 
+    }
+
+    boolean isClientAbort(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (Util.isInstanceOfClassName(t, "org.apache.catalina.connector.ClientAbortException")
+                    || Util.isInstanceOfClassName(t, "org.springframework.web.context.request.async.AsyncRequestNotUsableException")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private CoverArtRequest createCoverArtRequest(String id, int offset) {

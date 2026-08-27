@@ -30,6 +30,7 @@ import org.airsonic.player.domain.dto.MediaFileCoverArtRequest;
 import org.airsonic.player.domain.dto.PlaylistCoverArtRequest;
 import org.airsonic.player.service.CoverArtCreateService;
 import org.airsonic.player.util.ImageUtil;
+import org.apache.catalina.connector.ClientAbortException;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -43,15 +44,19 @@ import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
 import javax.imageio.ImageIO;
 
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
@@ -118,6 +123,17 @@ public class CoverArtControllerTest {
             // assertion
             assertArrayEquals(expected, actual);
         }
+    }
+
+    @Test
+    public void isClientAbortRecognizesDisconnectExceptions() {
+        // Client dropped the connection while cover art was streaming (slow network mount).
+        assertTrue(coverArtController.isClientAbort(new AsyncRequestNotUsableException("Response not usable")));
+        assertTrue(coverArtController.isClientAbort(new ClientAbortException("aborted")));
+        assertTrue(coverArtController.isClientAbort(new IOException("Broken pipe", new ClientAbortException("aborted"))));
+        // Ordinary processing failures are not client aborts — they must still reach sendFallback.
+        assertFalse(coverArtController.isClientAbort(new IOException("Cover art not found")));
+        assertFalse(coverArtController.isClientAbort(null));
     }
 
     @Test

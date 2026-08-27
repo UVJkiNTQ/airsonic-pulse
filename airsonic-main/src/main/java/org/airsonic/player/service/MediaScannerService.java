@@ -28,6 +28,7 @@ import org.airsonic.player.service.cache.ArtistByNameCache;
 import org.airsonic.player.service.search.IndexManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.SmartLifecycle;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.subsonic.restapi.ScanStatus;
@@ -56,12 +57,14 @@ import java.util.stream.Stream;
  * @author Sindre Mehus
  */
 @Service
-public class MediaScannerService {
+public class MediaScannerService implements SmartLifecycle {
 
     private static final Logger LOG = LoggerFactory.getLogger(MediaScannerService.class);
 
     private final AtomicBoolean scanning = new AtomicBoolean(false);
     private final AtomicBoolean mediaScaninng = new AtomicBoolean(false);
+    private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
+    private volatile boolean running = false;
 
     public MediaScannerService(
         SettingsService settingsService,
@@ -125,6 +128,31 @@ public class MediaScannerService {
 
     public void initNoSchedule() throws IOException {
         indexManager.deleteOldIndexFiles();
+    }
+
+    @Override
+    public void start() {
+        running = true;
+    }
+
+    @Override
+    public void stop() {
+        // Called by Spring on application shutdown BEFORE beans are destroyed and the
+        // EntityManagerFactory is closed. An in-flight async scan would otherwise keep
+        // persisting files and log a "scan file failed : EntityManagerFactory is closed"
+        // WARN for every remaining file. Flag the shutdown and cancel the scan loop.
+        running = false;
+        shuttingDown.set(true);
+        mediaScaninng.set(false);
+    }
+
+    @Override
+    public boolean isRunning() {
+        return running;
+    }
+
+    boolean isShuttingDown() {
+        return shuttingDown.get();
     }
 
     /**
@@ -528,6 +556,12 @@ public class MediaScannerService {
                 }
             }).join();
         } catch (Exception e) {
+            if (isShuttingDown()) {
+                // Application is shutting down (EntityManagerFactory already closing); the failure
+                // is expected — abort quietly instead of warning about every remaining file.
+                LOG.debug("Skipping {} — media library scan aborted on shutdown.", file.getPath());
+                return;
+            }
             LOG.warn("scan file failed : {} in {}", file.getPath(), musicFolder.getPath(), e);
         }
     }

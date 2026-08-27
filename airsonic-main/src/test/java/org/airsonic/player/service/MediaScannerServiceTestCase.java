@@ -41,10 +41,12 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.when;
@@ -186,6 +188,28 @@ public class MediaScannerServiceTestCase {
         reporter.report();
 
         System.out.print("End");
+    }
+
+
+    @Test
+    public void stopCancelsInFlightScanOnShutdown() {
+        // Precondition: idle and not shutting down.
+        assertFalse(mediaScannerService.isMediaScanning());
+        assertFalse(mediaScannerService.isShuttingDown());
+
+        // Simulate an in-flight scan, then application shutdown.
+        ReflectionTestUtils.setField(mediaScannerService, "mediaScaninng", new AtomicBoolean(true));
+        mediaScannerService.stop();
+
+        assertFalse(mediaScannerService.isRunning());
+        assertTrue(mediaScannerService.isShuttingDown());
+        // stop() must cancel the scan loop so scanFile/doScanLibrary abort instead of
+        // warning about every remaining file once the EntityManagerFactory closes.
+        assertFalse(mediaScannerService.isMediaScanning());
+
+        // Reset so the rest of this test class is unaffected.
+        ReflectionTestUtils.setField(mediaScannerService, "shuttingDown", new AtomicBoolean(false));
+        ReflectionTestUtils.setField(mediaScannerService, "mediaScaninng", new AtomicBoolean(false));
     }
 
 

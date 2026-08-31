@@ -43,11 +43,16 @@ import org.subsonic.restapi.Child;
 import org.subsonic.restapi.Contributor;
 import org.subsonic.restapi.MediaType;
 
+import javax.sql.DataSource;
+
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -1385,6 +1390,68 @@ class JaxbContentServiceTest {
             assertNull(JaxbContentService.parseItemDate("not-a-date"));
             assertNull(JaxbContentService.parseItemDate("20"));
             assertNull(JaxbContentService.parseItemDate("99999"));
+        }
+    }
+
+    @Nested
+    @MockitoSettings(strictness = Strictness.LENIENT)
+    public class JaxbBatchingStrategyTest {
+        private DataSource dataSourceWithProduct(String product) throws Exception {
+            DataSource ds = mock(DataSource.class);
+            Connection conn = mock(Connection.class);
+            DatabaseMetaData meta = mock(DatabaseMetaData.class);
+            when(ds.getConnection()).thenReturn(conn);
+            when(conn.getMetaData()).thenReturn(meta);
+            when(meta.getDatabaseProductName()).thenReturn(product);
+            return ds;
+        }
+
+        private JaxbContentService build(DataSource ds) {
+            return new JaxbContentService(jaxbWriter, artistService, coverArtService,
+                    playlistService, albumService, mediaFileService, mediaFolderService,
+                    transcodingService, ratingService, settingsService, ds);
+        }
+
+        private Album album(String artist, String name) {
+            Album a = mock(Album.class);
+            when(a.getArtist()).thenReturn(artist);
+            when(a.getName()).thenReturn(name);
+            when(a.getId()).thenReturn(1);
+            return a;
+        }
+
+        @Test
+        void hsqlDb_smallPage_usesPerItemRendering() throws Exception {
+            JaxbContentService hsql = build(dataSourceWithProduct("HSQL Database Engine"));
+            when(mediaFileService.getSongsForAlbum("Artist A", "Album A")).thenReturn(List.of());
+
+            hsql.createJaxbAlbums(List.of(album("Artist A", "Album A")), "user", a -> new AlbumID3());
+
+            verify(mediaFileService).getSongsForAlbum("Artist A", "Album A");
+            verify(mediaFileService, never()).getSongsForAlbums(any());
+        }
+
+        @Test
+        void hsqlDb_largePage_usesBatchedRendering() throws Exception {
+            JaxbContentService hsql = build(dataSourceWithProduct("HSQL Database Engine"));
+            List<Album> large = IntStream.range(0, 200)
+                    .mapToObj(i -> album("Artist " + i, "Album " + i))
+                    .toList();
+            when(mediaFileService.getSongsForAlbums(any())).thenReturn(Map.of());
+
+            hsql.createJaxbAlbums(large, "user", a -> new AlbumID3());
+
+            verify(mediaFileService).getSongsForAlbums(any());
+        }
+
+        @Test
+        void nonHsqlDb_anyPage_usesBatchedRendering() throws Exception {
+            JaxbContentService maria = build(dataSourceWithProduct("MariaDB"));
+            when(mediaFileService.getSongsForAlbums(any())).thenReturn(Map.of());
+
+            maria.createJaxbAlbums(List.of(album("Artist A", "Album A")), "user", a -> new AlbumID3());
+
+            verify(mediaFileService).getSongsForAlbums(any());
         }
     }
 

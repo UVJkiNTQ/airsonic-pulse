@@ -28,6 +28,8 @@ import org.airsonic.player.domain.MediaFile;
 import org.airsonic.player.domain.Player;
 import org.airsonic.player.domain.Playlist;
 import org.airsonic.player.util.StringUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.subsonic.restapi.AlbumID3;
 import org.subsonic.restapi.ArtistID3;
@@ -39,6 +41,10 @@ import org.subsonic.restapi.ItemGenre;
 import org.subsonic.restapi.RecordLabel;
 import org.subsonic.restapi.ReplayGain;
 
+import javax.sql.DataSource;
+
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -63,6 +69,20 @@ public class JaxbContentService {
     private final RatingService ratingService;
     private final SettingsService settingsService;
 
+    private static final Logger LOG = LoggerFactory.getLogger(JaxbContentService.class);
+
+    /**
+     * HSQLDB is measurably bad at the batched multi-column {@code IN} + filesort queries the 03cb23eb
+     * batching introduced (a 400k-row {@code album IN ... AND album_artist IN ...} lookup is ~10x slower
+     * than the same point lookups), while the old per-item point-lookup rendering was fast there. Below
+     * this page size we fall back to the per-item renderers on HSQLDB so the small pages clients use
+     * (20-50) keep the pre-batch speed; larger pages still batch (the N+1 batching was introduced to
+     * kill). MariaDB/Postgres keep batching for every page size.
+     */
+    private static final int HSQLDB_BATCH_THRESHOLD = 150;
+
+    private final boolean hsqlDb;
+
     JaxbContentService(
             JAXBWriter jaxbWriter,
             ArtistService artistService,
@@ -73,7 +93,8 @@ public class JaxbContentService {
             MediaFolderService mediaFolderService,
             TranscodingService transcodingService,
             RatingService ratingService,
-            SettingsService settingsService) {
+            SettingsService settingsService,
+            DataSource dataSource) {
         this.jaxbWriter = jaxbWriter;
         this.artistService = artistService;
         this.coverArtService = coverArtService;
@@ -84,6 +105,33 @@ public class JaxbContentService {
         this.transcodingService = transcodingService;
         this.ratingService = ratingService;
         this.settingsService = settingsService;
+        this.hsqlDb = detectHsqlDb(dataSource);
+    }
+
+    /**
+     * Detect HSQLDB (embedded file DB) from the DataSource metadata. Returns {@code false} for a null
+     * DataSource (unit tests) or when metadata is unavailable, keeping the batched path as the default.
+     */
+    private static boolean detectHsqlDb(DataSource dataSource) {
+        if (dataSource == null) {
+            return false;
+        }
+        try (Connection connection = dataSource.getConnection()) {
+            String productName = connection.getMetaData().getDatabaseProductName();
+            return productName != null && productName.toLowerCase().contains("hsql");
+        } catch (SQLException e) {
+            LOG.warn("Could not determine database product; assuming non-HSQLDB", e);
+            return false;
+        }
+    }
+
+    /**
+     * Whether a page of {@code size} items should use the batched {@code IN}-query renderers. On HSQLDB
+     * small pages go back to per-item point-lookup rendering (much faster there); every other database
+     * batches for all sizes.
+     */
+    private boolean useBatchedRendering(int size) {
+        return !hsqlDb || size > HSQLDB_BATCH_THRESHOLD;
     }
 
     public <T extends ArtistID3> T createJaxbArtist(T jaxbArtist, org.airsonic.player.domain.Artist artist, String username) {
@@ -150,6 +198,12 @@ public class JaxbContentService {
     public <T extends ArtistID3> List<T> createJaxbArtists(List<org.airsonic.player.domain.Artist> artists, String username, Function<org.airsonic.player.domain.Artist, T> factory) {
         if (artists == null || artists.isEmpty()) {
             return List.of();
+        }
+        if (!useBatchedRendering(artists.size())) {
+            // HSQLDB small page: per-item point lookups are much faster than the batched IN queries.
+            return artists.stream()
+                    .map(a -> createJaxbArtist(factory.apply(a), a, username))
+                    .toList();
         }
         ArtistRenderContext ctx = preloadArtistContext(artists, username);
         return artists.stream()
@@ -266,6 +320,12 @@ public class JaxbContentService {
         if (albums == null || albums.isEmpty()) {
             return List.of();
         }
+        if (!useBatchedRendering(albums.size())) {
+            // HSQLDB small page: per-item rendering (point lookups) is much faster than batched IN queries.
+            return albums.stream()
+                    .map(a -> createJaxbAlbum(factory.apply(a), a, username))
+                    .toList();
+        }
         AlbumRenderContext ctx = preloadAlbumContext(albums, username);
         return albums.stream()
                 .map(a -> createJaxbAlbum(factory.apply(a), a, username, ctx.tracksByAlbum.get(MediaFileService.AlbumKey.of(a)), ctx))
@@ -282,6 +342,21 @@ public class JaxbContentService {
     public <T extends AlbumID3> List<T> createJaxbAlbums(Player player, List<Album> albums, String username, Function<Album, T> factory) {
         if (albums == null || albums.isEmpty()) {
             return List.of();
+        }
+        if (!useBatchedRendering(albums.size())) {
+            // HSQLDB small page: per-item point lookups are much faster than the batched IN queries.
+            return albums.stream()
+                    .map(a -> {
+                        List<MediaFile> albumTracks = mediaFileService.getSongsForAlbum(a.getArtist(), a.getName());
+                        T jaxbAlbum = createJaxbAlbum(factory.apply(a), a, username, albumTracks);
+                        if (player != null && albumTracks != null) {
+                            for (MediaFile mf : albumTracks) {
+                                jaxbAlbum.getSong().add(createJaxbChild(player, mf, username));
+                            }
+                        }
+                        return jaxbAlbum;
+                    })
+                    .toList();
         }
         AlbumRenderContext ctx = preloadAlbumContext(albums, username);
         List<MediaFile> allTracks = albums.stream()
@@ -584,6 +659,12 @@ public class JaxbContentService {
     public <T extends Child> List<T> createJaxbChildren(Player player, List<MediaFile> mediaFiles, String username, Function<MediaFile, T> factory) {
         if (mediaFiles == null || mediaFiles.isEmpty()) {
             return List.of();
+        }
+        if (!useBatchedRendering(mediaFiles.size())) {
+            // HSQLDB small page: per-item point lookups are much faster than the batched IN queries.
+            return mediaFiles.stream()
+                    .map(mf -> createJaxbChild(factory.apply(mf), player, mf, username))
+                    .toList();
         }
         ChildRenderContext ctx = preloadChildContext(mediaFiles, username);
         return mediaFiles.stream()

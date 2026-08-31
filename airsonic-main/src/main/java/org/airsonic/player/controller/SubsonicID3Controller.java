@@ -50,6 +50,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.util.List;
 import java.util.Map;
 import java.util.SortedMap;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static org.springframework.web.bind.ServletRequestUtils.getIntParameter;
 import static org.springframework.web.bind.ServletRequestUtils.getRequiredIntParameter;
@@ -88,12 +90,22 @@ public class SubsonicID3Controller extends AbstractSubsonicController {
 
         List<org.airsonic.player.domain.Artist> artists = artistService.getAlphabeticalArtists(musicFolders);
         SortedMap<MusicIndex, List<MusicIndex.SortableArtistWithArtist>> indexedArtists = musicIndexService.getIndexedArtists(artists);
+        // Render the whole page in one batched pass (starred date, cover art, rating-eligible
+        // directory MediaFile, user/avg ratings) via a handful of IN queries, instead of the
+        // ~6 per-artist round-trips of the single-item createJaxbArtist — the N+1 that made
+        // getArtists take tens of seconds on libraries with tens of thousands of artists.
+        Map<Integer, ArtistID3> jaxbByArtistId = Map.of();
+        if (!artists.isEmpty()) {
+            jaxbByArtistId = jaxbContentService.createJaxbArtists(artists, username, artist -> new ArtistID3())
+                    .stream()
+                    .collect(Collectors.toMap(a -> Integer.parseInt(a.getId()), Function.identity()));
+        }
         for (Map.Entry<MusicIndex, List<MusicIndex.SortableArtistWithArtist>> entry : indexedArtists.entrySet()) {
             IndexID3 index = new IndexID3();
             result.getIndex().add(index);
             index.setName(entry.getKey().getIndex());
             for (MusicIndex.SortableArtistWithArtist sortableArtist : entry.getValue()) {
-                index.getArtist().add(jaxbContentService.createJaxbArtist(new ArtistID3(), sortableArtist.getArtist(), username));
+                index.getArtist().add(jaxbByArtistId.get(sortableArtist.getArtist().getId()));
             }
         }
 

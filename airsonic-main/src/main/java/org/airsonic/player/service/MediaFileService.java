@@ -309,6 +309,10 @@ public class MediaFileService {
                         createIndexedTracks(mediaFile);
                         // update media file
                         mediaFile.setChanged(mediaChanged.compareTo(cueChanged) >= 0 ? mediaChanged : cueChanged);
+                        // stamp the base row so a VERSION bump doesn't re-materialise the
+                        // indexed tracks on every scan (#341) — this branch bypasses
+                        // updateMediaFileByFile, which stamps the plain-file path
+                        mediaFile.markCurrentVersion();
                         updateMediaFile(mediaFile);
                     } catch (Exception e) {
                         LOG.error("create indexed tracks error: {}", mediaFile.getFullPath(), e);
@@ -1293,6 +1297,11 @@ public class MediaFileService {
             }
         }
 
+        // Stamp the freshly reflected row with the current schema version. This mutates the
+        // loaded entity in place, so without the stamp an upgraded row keeps its old stored
+        // version and needsUpdate re-parses it on every scan (#341).
+        mediaFile.markCurrentVersion();
+
         return mediaFile;
 
     }
@@ -1807,7 +1816,10 @@ public class MediaFileService {
 
         Pair<Integer, Instant> lastPlayedInfo = lastPlayed.computeIfAbsent(player.getId(), k -> Pair.of(file.getId(), now));
         if (lastPlayedInfo.getLeft() == file.getId()) {
-            Double threshold = Math.max(1.0, file.getDuration() / 2);
+            // duration is nullable (#322); an unknown-length file gets the 1.0s minimum
+            // replay-debounce window instead of NPE-ing the whole play-count increment
+            Double duration = file.getDuration();
+            double threshold = Math.max(1.0, (duration == null ? 0 : duration) / 2);
             if (Duration.between(lastPlayedInfo.getRight(), now).getSeconds() < threshold) {
                 return;
             }

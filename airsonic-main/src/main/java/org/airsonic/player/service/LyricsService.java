@@ -148,6 +148,21 @@ public class LyricsService {
 
     @Transactional
     public boolean saveLyricsForMediaFile(@Nonnull MediaFile mediaFile, @Nonnull String lyricsText, @Nonnull String source) {
+        return saveLyricsForMediaFile(mediaFile, lyricsText, source, false);
+    }
+
+    /**
+     * Saves lyrics for a media file, optionally parsing LRC timestamps into structured lines.
+     *
+     * <p>
+     * When {@code synced} is true the text is run through the LRC parser and, if it yields timed
+     * lines, the row is marked synced and the lines are stored alongside the flat text blob. Any
+     * existing structured lines are replaced, so editing or re-fetching lyrics never leaves stale
+     * timestamps behind.
+     */
+    @Transactional
+    public boolean saveLyricsForMediaFile(@Nonnull MediaFile mediaFile, @Nonnull String lyricsText, @Nonnull String source,
+            boolean synced) {
 
         if (mediaFile.isDirectory()) {
             LOG.warn("MediaFile is a directory, cannot save lyrics");
@@ -156,8 +171,27 @@ public class LyricsService {
 
         Lyrics lyrics = lyricsRepository.findByMediaFileId(mediaFile.getId())
                 .orElse(new Lyrics("", mediaFile.getId(), source));
-        lyrics.setLyrics(lyricsText);
         lyrics.setSource(source);
+        lyrics.getLines().clear();
+        lyrics.setSynced(false);
+        String flatText = lyricsText;
+        if (synced) {
+            LrcFile lrcFile = lrcParser.parseText(lyricsText);
+            if (lrcFile != null && !lrcFile.getLyricsLines().isEmpty()) {
+                // Store timestamp-free text in the flat blob (read by the web popup and the legacy
+                // /getLyrics endpoint) while keeping the timed lines structured — this mirrors the
+                // sidecar path in getLyricsFromMediaFile.
+                StringBuilder text = new StringBuilder();
+                int position = 0;
+                for (LyricsLine line : lrcFile.getLyricsLines()) {
+                    text.append(line.getText()).append('\n');
+                    lyrics.getLines().add(new StructuredLyricsLine(lyrics, position++, line.getTime(), line.getText()));
+                }
+                flatText = text.toString();
+                lyrics.setSynced(true);
+            }
+        }
+        lyrics.setLyrics(flatText);
         lyricsRepository.save(lyrics);
         return true;
 

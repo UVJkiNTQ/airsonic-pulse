@@ -188,6 +188,45 @@ class LyricsServiceTest {
         verify(lyricsRepository).save(lyrics);
     }
 
+    @Test
+    void saveLyricsForMediaFile_shouldStoreSyncedLinesFromLrc() {
+        when(mediaFile.isDirectory()).thenReturn(false);
+        when(mediaFile.getId()).thenReturn(12);
+        when(lyricsRepository.findByMediaFileId(12)).thenReturn(Optional.empty());
+
+        String lrc = "[by:someone]\n[00:01.000]First\n[00:02.500]Second\n";
+        boolean result = lyricsService.saveLyricsForMediaFile(mediaFile, lrc, "music.163.com", true);
+
+        assertTrue(result);
+        ArgumentCaptor<Lyrics> captor = ArgumentCaptor.forClass(Lyrics.class);
+        verify(lyricsRepository).save(captor.capture());
+        Lyrics saved = captor.getValue();
+        assertEquals("music.163.com", saved.getSource());
+        assertTrue(saved.isSynced());
+        assertEquals("First\nSecond\n", saved.getLyrics());
+        assertEquals(2, saved.getLines().size());
+        assertEquals("First", saved.getLines().get(0).getText());
+        assertEquals(1_000, saved.getLines().get(0).getStartMs());
+        assertEquals(0, saved.getLines().get(0).getPosition());
+        assertEquals(2_500, saved.getLines().get(1).getStartMs());
+    }
+
+    @Test
+    void saveLyricsForMediaFile_shouldClearSyncedLinesForPlainText() {
+        when(mediaFile.isDirectory()).thenReturn(false);
+        when(mediaFile.getId()).thenReturn(13);
+        Lyrics lyrics = new Lyrics("old", 13, "music.163.com");
+        lyrics.setSynced(true);
+        lyrics.getLines().add(new StructuredLyricsLine(lyrics, 0, 1_000, "old line"));
+        when(lyricsRepository.findByMediaFileId(13)).thenReturn(Optional.of(lyrics));
+
+        boolean result = lyricsService.saveLyricsForMediaFile(mediaFile, "plain text", "user");
+
+        assertTrue(result);
+        assertFalse(lyrics.isSynced());
+        assertTrue(lyrics.getLines().isEmpty());
+    }
+
     // ---------------------------------------------------------------------------------------
     // Embedded lyrics tier (#158): DB cache -> LRC sidecar -> embedded tag -> null.
     // ---------------------------------------------------------------------------------------

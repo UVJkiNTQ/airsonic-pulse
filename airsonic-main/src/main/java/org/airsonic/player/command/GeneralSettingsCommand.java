@@ -37,6 +37,9 @@ public class GeneralSettingsCommand {
     private CoverArtSource coverArtSource;
     private Integer coverArtQuality;
     private Integer coverArtConcurrency;
+    private Double replayGainFallback;
+    private Integer scanTimeoutSeconds;
+    private Integer fullScanTimeoutSeconds;
     private String index;
     private String ignoredArticles;
     private String genreSeparators;
@@ -108,6 +111,30 @@ public class GeneralSettingsCommand {
 
     public void setCoverArtConcurrency(Integer coverArtConcurrency) {
         this.coverArtConcurrency = coverArtConcurrency;
+    }
+
+    public Double getReplayGainFallback() {
+        return replayGainFallback;
+    }
+
+    public void setReplayGainFallback(Double replayGainFallback) {
+        this.replayGainFallback = replayGainFallback;
+    }
+
+    public Integer getScanTimeoutSeconds() {
+        return scanTimeoutSeconds;
+    }
+
+    public void setScanTimeoutSeconds(Integer scanTimeoutSeconds) {
+        this.scanTimeoutSeconds = scanTimeoutSeconds;
+    }
+
+    public Integer getFullScanTimeoutSeconds() {
+        return fullScanTimeoutSeconds;
+    }
+
+    public void setFullScanTimeoutSeconds(Integer fullScanTimeoutSeconds) {
+        this.fullScanTimeoutSeconds = fullScanTimeoutSeconds;
     }
 
     public String getIndex() {

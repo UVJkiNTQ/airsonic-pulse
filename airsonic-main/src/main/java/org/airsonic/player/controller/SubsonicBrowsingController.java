@@ -65,7 +65,7 @@ import static org.springframework.web.bind.ServletRequestUtils.getRequiredString
 import static org.springframework.web.bind.ServletRequestUtils.getStringParameter;
 
 @Controller
-@RequestMapping(value = {"/rest", "/ext"}, method = {RequestMethod.GET, RequestMethod.POST})
+@RequestMapping(value = "/rest", method = {RequestMethod.GET, RequestMethod.POST})
 public class SubsonicBrowsingController extends AbstractSubsonicController {
 
     @Autowired
@@ -244,6 +244,7 @@ public class SubsonicBrowsingController extends AbstractSubsonicController {
         String username = securityService.getCurrentUsername(request);
         Player player = playerService.getPlayer(request, response, username);
 
+        // No clamp needed (#286): size becomes a query LIMIT bounded by the actual video rows; the Integer.MAX_VALUE default deliberately returns everything.
         int size = getIntParameter(request, "size", Integer.MAX_VALUE);
         int offset = getIntParameter(request, "offset", 0);
         List<org.airsonic.player.domain.MusicFolder> musicFolders = mediaFolderService.getMusicFoldersForUser(username);

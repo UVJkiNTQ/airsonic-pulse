@@ -264,7 +264,12 @@ public class MediaScannerService implements SmartLifecycle {
         ForkJoinPool pool = new ForkJoinPool(scannerParallelism, mediaScannerThreadFactory, null, true);
 
         boolean isFullScan = settingsService.getFullScan();
-        long timeoutSeconds = getEffectiveTimeout(isFullScan);
+        // A timeout set in General Settings (or written to airsonic.properties) wins; the
+        // startup-bound AirsonicScanConfig value is the fallback. Read here, per scan, so a
+        // settings change applies to the next scan without a restart.
+        Integer timeoutSetting = isFullScan ? settingsService.getFullScanTimeoutSeconds() : settingsService.getScanTimeoutSeconds();
+        long timeoutSeconds = timeoutSetting != null ? timeoutSetting
+                : (isFullScan ? scanConfig.getFullTimeout() : scanConfig.getTimeout());
         MediaLibraryStatistics statistics = new MediaLibraryStatistics();
 
         List<MusicFolder> foldersToScan = mediaFolderService.getAllMusicFolders(false, true).stream()
@@ -285,7 +290,9 @@ public class MediaScannerService implements SmartLifecycle {
         List<Integer> scannedIds = foldersToScan.stream().map(MusicFolder::getId).toList();
         boolean isPartialScan = !allFolderIds.equals(scannedIds);
 
-        LOG.info("Starting media library scan for {} folder(s) with timeout {} seconds.", foldersToScan.size(), timeoutSeconds);
+        LOG.info("Starting {} scan for {} of {} folder(s), timeout {} s ({}).",
+                isFullScan ? "full" : "quick", foldersToScan.size(), allFolderIds.size(), timeoutSeconds,
+                timeoutSetting != null ? "from General Settings" : "from AirsonicScanConfig default");
         CompletableFuture.runAsync(() -> {
             doScanLibrary(pool, statistics, foldersToScan);
         }, pool)
@@ -312,18 +319,6 @@ public class MediaScannerService implements SmartLifecycle {
                     setScanning(false);
                     pool.shutdown();
                 });
-    }
-
-    /**
-     * Gets the effective timeout value, checking SettingsService first (user-overridable at runtime),
-     * then falling back to AirsonicScanConfig (environment/startup config).
-     */
-    private long getEffectiveTimeout(boolean isFullScan) {
-        int settingsTimeout = isFullScan ? settingsService.getScanFullTimeout() : settingsService.getScanTimeout();
-        if (settingsTimeout > 0) {
-            return settingsTimeout;
-        }
-        return isFullScan ? scanConfig.getFullTimeout() : scanConfig.getTimeout();
     }
 
     /**

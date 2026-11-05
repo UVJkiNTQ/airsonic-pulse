@@ -181,18 +181,6 @@
         <th:block th:replace="~{helpToolTip((topic=clearfullscan))}" />
     </div>
 
-    <div>
-        <span th:text="#{musicfoldersettings.scantimeout}"></span>
-        <input type="number" th:field="*{scanTimeout}" size="10" min="0" style="width:6em"/>
-        <span class="detail" th:text="#{musicfoldersettings.scantimeout.description}"></span>
-    </div>
-
-    <div>
-        <span th:text="#{musicfoldersettings.fullscantimeout}"></span>
-        <input type="number" th:field="*{scanFullTimeout}" size="10" min="0" style="width:6em"/>
-        <span class="detail" th:text="#{musicfoldersettings.fullscantimeout.description}"></span>
-    </div>
-
     <div style="padding-top: 0.5em;padding-bottom: 0.3em">
         <span style="white-space: nowrap">
             <span th:text="#{musicfoldersettings.scan}"></span>

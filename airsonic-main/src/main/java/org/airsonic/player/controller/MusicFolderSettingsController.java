@@ -121,8 +121,6 @@ public class MusicFolderSettingsController {
         command.setHideVirtualTracks(settingsService.getHideVirtualTracks());
         command.setFullScan(settingsService.getFullScan());
         command.setClearFullScanSettingAfterScan(!settingsService.getFullScan() ? settingsService.getFullScan() : settingsService.getClearFullScanSettingAfterScan());
-        command.setScanTimeout(settingsService.getScanTimeout() > 0 ? settingsService.getScanTimeout() : null);
-        command.setScanFullTimeout(settingsService.getScanFullTimeout() > 0 ? settingsService.getScanFullTimeout() : null);
 
         model.addAttribute("command", command);
     }
@@ -219,8 +217,6 @@ public class MusicFolderSettingsController {
         settingsService.setHideVirtualTracks(command.isHideVirtualTracks());
         settingsService.setFullScan(command.getFullScan());
         settingsService.setClearFullScanSettingAfterScan(!command.getFullScan() ? command.getFullScan() : command.getClearFullScanSettingAfterScan());
-        settingsService.setScanTimeout(command.getScanTimeout());
-        settingsService.setScanFullTimeout(command.getScanFullTimeout());
         settingsService.save();
 
         redirectAttributes.addFlashAttribute("settings_toast", success);

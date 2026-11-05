@@ -24,6 +24,7 @@ import com.google.common.math.DoubleMath;
 import com.ibm.icu.text.CharsetDetector;
 import com.ibm.icu.text.CharsetMatch;
 import org.airsonic.player.ajax.MediaFileEntry;
+import org.airsonic.player.build.UnmodifiableResult;
 import org.airsonic.player.controller.HomeController;
 import org.airsonic.player.domain.*;
 import org.airsonic.player.domain.CoverArt.EntityType;
@@ -348,6 +349,7 @@ public class MediaFileService {
      * @param sort               Whether to sort files in the same directory.
      * @return All children media files.
      */
+    @UnmodifiableResult
     public List<MediaFile> getChildrenOf(MediaFile parent, boolean includeFiles, boolean includeDirectories, boolean sort) {
         return getChildrenOf(parent, includeFiles, includeDirectories, sort, settingsService.isFastCacheEnabled());
     }
@@ -361,6 +363,7 @@ public class MediaFileService {
      * @param minimizeDiskAccess Whether to refrain from checking for new or changed files
      * @return All children media files.
      */
+    @UnmodifiableResult
     public List<MediaFile> getChildrenOf(MediaFile parent, boolean includeFiles, boolean includeDirectories, boolean sort, boolean minimizeDiskAccess) {
 
         if (!parent.isDirectory()) {
@@ -764,21 +767,29 @@ public class MediaFileService {
 
     /**
      * Returns random songs for the given parent.
+     * <p>
+     * The pick is a single subtree-scoped query ordered by the database's random function and
+     * bounded to {@code count} rows (#351) — the subtree is never materialised in memory and no
+     * per-descendant last-modified check runs, so the result reflects the state of the last scan.
      *
      * @param parent The parent.
      * @param count  Max number of songs to return.
      * @return Random songs.
      */
-    @Transactional(isolation = Isolation.READ_COMMITTED)
+    @Transactional(readOnly = true)
     public List<MediaFile> getRandomSongsForParent(MediaFile parent, int count) {
-        List<MediaFile> children = getDescendantsOf(parent, false);
-        removeVideoFiles(children);
-
-        if (children.isEmpty()) {
-            return children;
+        if (count == 0) {
+            return new ArrayList<>();
         }
-        Collections.shuffle(children);
-        return children.subList(0, Math.min(count, children.size()));
+        if (parent.isFile()) {
+            // a file parent is its own single candidate, videos excluded as before
+            return parent.isVideo() ? new ArrayList<>() : new ArrayList<>(List.of(parent));
+        }
+        // copy: the paged result is unmodifiable and callers (PlayQueueService.doPlay) mutate it
+        return new ArrayList<>(mediaFileRepository.findAll(
+                MediaFileSpecifications.randomSongsUnderParent(parent.getFolder(), parent.getPath(),
+                        settingsService.getHideVirtualTracks(), settingsService.getDatabaseType()),
+                Pageable.ofSize(count)));
     }
 
     /**

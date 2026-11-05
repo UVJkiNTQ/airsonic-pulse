@@ -51,7 +51,7 @@ import static org.springframework.web.bind.ServletRequestUtils.getRequiredIntPar
 import static org.springframework.web.bind.ServletRequestUtils.getRequiredStringParameter;
 
 @Controller
-@RequestMapping(value = {"/rest", "/ext"}, method = {RequestMethod.GET, RequestMethod.POST})
+@RequestMapping(value = "/rest", method = {RequestMethod.GET, RequestMethod.POST})
 public class SubsonicPodcastController extends AbstractSubsonicController {
 
     @Autowired
@@ -110,6 +110,9 @@ public class SubsonicPodcastController extends AbstractSubsonicController {
         Player player = playerService.getPlayer(request, response, username);
 
         int count = getIntParameter(request, "count", 20);
+        // #286: allocation is bounded by the episode table, but a negative count crashes the
+        // subList in getNewestEpisodes; the #262 clamp's zero floor guards it.
+        count = Math.max(0, Math.min(count, 500));
         NewestPodcasts result = new NewestPodcasts();
 
         for (org.airsonic.player.domain.PodcastEpisode episode : podcastPersistenceService.getNewestEpisodes(count)) {

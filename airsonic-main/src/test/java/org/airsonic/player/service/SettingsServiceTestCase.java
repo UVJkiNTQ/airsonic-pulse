@@ -158,6 +158,48 @@ public class SettingsServiceTestCase {
         verifySettings(newSettingsService());
     }
 
+    @Test
+    public void testScanTimeoutsRoundTrip() {
+        assertNull(settingsService.getScanTimeoutSeconds());
+        assertNull(settingsService.getFullScanTimeoutSeconds());
+
+        settingsService.setScanTimeoutSeconds(600);
+        settingsService.setFullScanTimeoutSeconds(7200);
+        assertEquals(600, settingsService.getScanTimeoutSeconds());
+        assertEquals(7200, settingsService.getFullScanTimeoutSeconds());
+        settingsService.save();
+        SettingsService freshService = newSettingsService();
+        assertEquals(600, freshService.getScanTimeoutSeconds());
+        assertEquals(7200, freshService.getFullScanTimeoutSeconds());
+
+        settingsService.setScanTimeoutSeconds(null);
+        settingsService.setFullScanTimeoutSeconds(null);
+        assertNull(settingsService.getScanTimeoutSeconds());
+        assertNull(settingsService.getFullScanTimeoutSeconds());
+        settingsService.save();
+        freshService = newSettingsService();
+        assertNull(freshService.getScanTimeoutSeconds());
+        assertNull(freshService.getFullScanTimeoutSeconds());
+    }
+
+    @Test
+    public void testReplayGainFallbackRoundTrip() {
+        assertNull(settingsService.getReplayGainFallback());
+
+        settingsService.setReplayGainFallback(3.5);
+        assertEquals(3.5, settingsService.getReplayGainFallback());
+        settingsService.save();
+        assertEquals(3.5, newSettingsService().getReplayGainFallback());
+
+        settingsService.setReplayGainFallback(0.0);
+        assertEquals(0.0, settingsService.getReplayGainFallback());
+
+        settingsService.setReplayGainFallback(null);
+        assertNull(settingsService.getReplayGainFallback());
+        settingsService.save();
+        assertNull(newSettingsService().getReplayGainFallback());
+    }
+
     private void verifySettings(SettingsService ss) {
         assertEquals("indexString", ss.getIndexString());
         assertEquals("a the foo bar", ss.getIgnoredArticles());

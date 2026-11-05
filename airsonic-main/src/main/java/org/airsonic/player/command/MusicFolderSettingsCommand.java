@@ -56,8 +56,6 @@ public class MusicFolderSettingsCommand {
     private boolean hideVirtualTracks;
     private Boolean fullScan;
     private Boolean clearFullScanSettingAfterScan;
-    private Integer scanTimeout;
-    private Integer scanFullTimeout;
 
     public String getInterval() {
         return interval;
@@ -177,22 +175,6 @@ public class MusicFolderSettingsCommand {
 
     public void setClearFullScanSettingAfterScan(Boolean clearFullScanSettingAfterScan) {
         this.clearFullScanSettingAfterScan = clearFullScanSettingAfterScan;
-    }
-
-    public Integer getScanTimeout() {
-        return scanTimeout;
-    }
-
-    public void setScanTimeout(Integer scanTimeout) {
-        this.scanTimeout = scanTimeout;
-    }
-
-    public Integer getScanFullTimeout() {
-        return scanFullTimeout;
-    }
-
-    public void setScanFullTimeout(Integer scanFullTimeout) {
-        this.scanFullTimeout = scanFullTimeout;
     }
 
     public String getUploadsFolder() {

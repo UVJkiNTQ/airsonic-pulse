@@ -89,13 +89,18 @@ public class MusicFolderSettingsController {
 
     @ModelAttribute
     protected void formBackingObject(@RequestParam(value = "scanNow", required = false) String scanNow,
+                                       @RequestParam(value = "scanFolderId", required = false) List<Integer> scanFolderIds,
                                        @RequestParam(value = "expunge", required = false) String expunge,
                                        Model model) {
         MusicFolderSettingsCommand command = new MusicFolderSettingsCommand();
 
         if (scanNow != null) {
             mediaFolderService.clearMusicFolderCache();
-            mediaScannerService.scanLibrary();
+            if (scanFolderIds != null && !scanFolderIds.isEmpty()) {
+                mediaScannerService.scanLibrary(scanFolderIds);
+            } else {
+                mediaScannerService.scanLibrary();
+            }
         }
         if (expunge != null) {
             expunge();
@@ -218,6 +223,15 @@ public class MusicFolderSettingsController {
         redirectAttributes.addFlashAttribute("settings_reload", success);
 
         mediaScannerService.schedule();
+
+        // Trigger scan for selected folders
+        List<Integer> scanFolderIds = command.getMusicFolders().stream()
+                .filter(MusicFolderInfo::getScan)
+                .map(MusicFolderInfo::getId)
+                .toList();
+        if (!scanFolderIds.isEmpty()) {
+            mediaScannerService.scanLibrary(scanFolderIds);
+        }
         return "redirect:musicFolderSettings.view";
     }
 

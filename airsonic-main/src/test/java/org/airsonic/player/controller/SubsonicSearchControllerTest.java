@@ -64,6 +64,8 @@ class SubsonicSearchControllerTest {
     @Mock
     private SearchService searchService;
     @Mock
+    private MediaFileService mediaFileService;
+    @Mock
     private MediaFolderService mediaFolderService;
     @Mock
     private SecurityService securityService;
@@ -77,8 +79,6 @@ class SubsonicSearchControllerTest {
     private ArtistService artistService;
     @Mock
     private AlbumService albumService;
-    @Mock
-    private MediaFileService mediaFileService;
 
     private SubsonicSearchController controller;
 
@@ -94,6 +94,7 @@ class SubsonicSearchControllerTest {
     void setUp() throws Exception {
         controller = new SubsonicSearchController();
         ReflectionTestUtils.setField(controller, "searchService", searchService);
+        ReflectionTestUtils.setField(controller, "mediaFileService", mediaFileService);
         ReflectionTestUtils.setField(controller, "mediaFolderService", mediaFolderService);
         ReflectionTestUtils.setField(controller, "securityService", securityService);
         ReflectionTestUtils.setField(controller, "jaxbContentService", jaxbContentService);
@@ -101,14 +102,15 @@ class SubsonicSearchControllerTest {
         ReflectionTestUtils.setField(controller, "jaxbWriter", jaxbWriter);
         ReflectionTestUtils.setField(controller, "artistService", artistService);
         ReflectionTestUtils.setField(controller, "albumService", albumService);
-        ReflectionTestUtils.setField(controller, "mediaFileService", mediaFileService);
 
         when(securityService.getCurrentUsername(any())).thenReturn("alice");
         when(playerService.getPlayersForUserAndClientId(any(), any())).thenReturn(List.of(new Player()));
         when(playerService.getPlayer(any(), any(), anyString())).thenReturn(new Player());
         when(mediaFolderService.getMusicFoldersForUser(anyString())).thenReturn(List.of());
         when(mediaFolderService.getMusicFoldersForUser(anyString(), any())).thenReturn(List.of());
+        when(mediaFileService.showMediaFile(any())).thenReturn(true);
         when(jaxbWriter.createResponse(anyBoolean())).thenReturn(new Response());
+        when(jaxbContentService.createJaxbChildren(any(), any(), anyString(), any())).thenReturn(List.of());
         when(searchService.search(any(SearchCriteria.class), any(), any())).thenAnswer(invocation -> {
             SearchCriteria c = invocation.getArgument(0);
             searchArgs.add(new int[] {c.getCount(), c.getOffset()});
@@ -146,7 +148,7 @@ class SubsonicSearchControllerTest {
 
         assertThat(searchArgs).hasSize(1);
         assertThat(searchArgs.get(0)[0]).isEqualTo(500);   // count clamped
-        assertThat(searchArgs.get(0)[1]).isEqualTo(500);   // offset clamped
+        assertThat(searchArgs.get(0)[1]).isEqualTo(500);   // Lucene offset clamped to MAX_COUNT
     }
 
     @Test
@@ -181,7 +183,7 @@ class SubsonicSearchControllerTest {
     @Test
     void search_clampsAbusiveOffsetEvenWithSmallCount() throws Exception {
         // The offset is added to count at the allocation point; an abusive offset alone (which
-        // would overflow offset+count to a negative) is independently clamped.
+        // would overflow offset+count to a negative) is independently bounded to MAX_COUNT.
         MockHttpServletRequest request = req();
         request.setParameter("query", "anything");
         request.setParameter("count", "20");
@@ -217,6 +219,32 @@ class SubsonicSearchControllerTest {
 
         assertThat(searchArgs.get(0)[0]).isEqualTo(100);
         assertThat(searchArgs.get(0)[1]).isEqualTo(40);
+    }
+
+    @Test
+    void clamp_helperBoundsToZeroAndMaxCount() {
+        // Direct seam: the load-bearing arithmetic, including the negative floor and the ceiling
+        // that bounds a single page size.
+        assertThat(SubsonicSearchController.clamp(Integer.MAX_VALUE)).isEqualTo(500);
+        assertThat(SubsonicSearchController.clamp(501)).isEqualTo(500);
+        assertThat(SubsonicSearchController.clamp(500)).isEqualTo(500);
+        assertThat(SubsonicSearchController.clamp(100)).isEqualTo(100);
+        assertThat(SubsonicSearchController.clamp(0)).isEqualTo(0);
+        assertThat(SubsonicSearchController.clamp(-1)).isEqualTo(0);
+        assertThat(SubsonicSearchController.clamp(Integer.MIN_VALUE)).isEqualTo(0);
+    }
+
+    @Test
+    void enumerationOffset_floorsNegativesAndPassesDeepThrough() {
+        // #333: the search3 empty-query path reads via SQL OFFSET — no Lucene TopDocs allocation —
+        // so a deep offset is legitimate pagination and must not be capped. Only the negative
+        // floor applies (mirrors getAlbumList2 / getSongsByGenre).
+        assertThat(SubsonicSearchController.enumerationOffset(2000)).isEqualTo(2000);
+        assertThat(SubsonicSearchController.enumerationOffset(50_000)).isEqualTo(50_000);
+        assertThat(SubsonicSearchController.enumerationOffset(Integer.MAX_VALUE)).isEqualTo(Integer.MAX_VALUE);
+        assertThat(SubsonicSearchController.enumerationOffset(0)).isEqualTo(0);
+        assertThat(SubsonicSearchController.enumerationOffset(-1)).isEqualTo(0);
+        assertThat(SubsonicSearchController.enumerationOffset(Integer.MIN_VALUE)).isEqualTo(0);
     }
 
     @Test
@@ -289,6 +317,10 @@ class SubsonicSearchControllerTest {
         request.setParameter("query", "anything");
         request.setParameter("artistCount", "500");
         request.setParameter("artistOffset", "2000");
+        request.setParameter("albumCount", "500");
+        request.setParameter("albumOffset", "2000");
+        request.setParameter("songCount", "500");
+        request.setParameter("songOffset", "2000");
 
         controller.search3(request, new MockHttpServletResponse());
 
@@ -297,18 +329,5 @@ class SubsonicSearchControllerTest {
         assertThat(artistArgs).isEmpty();
         assertThat(albumArgs).isEmpty();
         assertThat(songArgs).isEmpty();
-    }
-
-    @Test
-    void clamp_helperBoundsToZeroAndMaxCount() {
-        // Direct seam: the load-bearing arithmetic, including the negative floor and the ceiling
-        // that bounds offset+count (and removes the offset+count integer-overflow path).
-        assertThat(SubsonicSearchController.clamp(Integer.MAX_VALUE)).isEqualTo(500);
-        assertThat(SubsonicSearchController.clamp(501)).isEqualTo(500);
-        assertThat(SubsonicSearchController.clamp(500)).isEqualTo(500);
-        assertThat(SubsonicSearchController.clamp(100)).isEqualTo(100);
-        assertThat(SubsonicSearchController.clamp(0)).isEqualTo(0);
-        assertThat(SubsonicSearchController.clamp(-1)).isEqualTo(0);
-        assertThat(SubsonicSearchController.clamp(Integer.MIN_VALUE)).isEqualTo(0);
     }
 }

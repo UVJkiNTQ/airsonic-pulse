@@ -48,8 +48,8 @@ public class OpenSubsonicExtensionsApiTest extends AbstractRESTTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.subsonic-response.status").value("ok"))
             .andExpect(jsonPath("$.subsonic-response.openSubsonic").value(true))
-            .andExpect(jsonPath("$.subsonic-response.openSubsonicExtensions.openSubsonicExtension[*].name").value(hasItem("formPost")))
-            .andExpect(jsonPath("$.subsonic-response.openSubsonicExtensions.openSubsonicExtension[?(@.name=='formPost')].versions[0]").value(hasItem(1)));
+            .andExpect(jsonPath("$.subsonic-response.openSubsonicExtensions[*].name").value(hasItem("formPost")))
+            .andExpect(jsonPath("$.subsonic-response.openSubsonicExtensions[?(@.name=='formPost')].versions[0]").value(hasItem(1)));
     }
 
     @ParameterizedTest
@@ -64,8 +64,8 @@ public class OpenSubsonicExtensionsApiTest extends AbstractRESTTest {
             .contentType(MediaType.APPLICATION_JSON))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.subsonic-response.status").value("ok"))
-            .andExpect(jsonPath("$.subsonic-response.openSubsonicExtensions.openSubsonicExtension[*].name").value(hasItem("indexBasedQueue")))
-            .andExpect(jsonPath("$.subsonic-response.openSubsonicExtensions.openSubsonicExtension[?(@.name=='indexBasedQueue')].versions[0]").value(hasItem(1)));
+            .andExpect(jsonPath("$.subsonic-response.openSubsonicExtensions[*].name").value(hasItem("indexBasedQueue")))
+            .andExpect(jsonPath("$.subsonic-response.openSubsonicExtensions[?(@.name=='indexBasedQueue')].versions[0]").value(hasItem(1)));
     }
 
     @ParameterizedTest
@@ -80,8 +80,8 @@ public class OpenSubsonicExtensionsApiTest extends AbstractRESTTest {
             .contentType(MediaType.APPLICATION_JSON))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.subsonic-response.status").value("ok"))
-            .andExpect(jsonPath("$.subsonic-response.openSubsonicExtensions.openSubsonicExtension[*].name").value(hasItem("getPodcastEpisode")))
-            .andExpect(jsonPath("$.subsonic-response.openSubsonicExtensions.openSubsonicExtension[?(@.name=='getPodcastEpisode')].versions[0]").value(hasItem(1)));
+            .andExpect(jsonPath("$.subsonic-response.openSubsonicExtensions[*].name").value(hasItem("getPodcastEpisode")))
+            .andExpect(jsonPath("$.subsonic-response.openSubsonicExtensions[?(@.name=='getPodcastEpisode')].versions[0]").value(hasItem(1)));
     }
 
     @ParameterizedTest
@@ -99,7 +99,7 @@ public class OpenSubsonicExtensionsApiTest extends AbstractRESTTest {
             .param("f", EXPECTED_FORMAT)
             .contentType(MediaType.APPLICATION_JSON))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.subsonic-response.openSubsonicExtensions.openSubsonicExtension[*].name")
+            .andExpect(jsonPath("$.subsonic-response.openSubsonicExtensions[*].name")
                 .value(containsInAnyOrder("formPost", "transcodeOffset", "songLyrics",
                     "indexBasedQueue", "apiKeyAuthentication", "getPodcastEpisode")));
     }

@@ -86,6 +86,18 @@ public class MusicFolderTestData {
         return resolveBaseMediaPath().resolve("lyrics");
     }
 
+    public static Path resolveMusicExtendedCue1FolderPath() {
+        return resolveBaseMediaPath().resolve("extendedCue1");
+    }
+
+    public static Path resolveMusicExtendedCue2FolderPath() {
+        return resolveBaseMediaPath().resolve("extendedCue2");
+    }
+
+    public static Path resolveMusicExtendedCue3FolderPath() {
+        return resolveBaseMediaPath().resolve("extendedCue3");
+    }
+
 
     /**
      * Builds UNPERSISTED, id-less MusicFolder instances for the shared MEDIAS/Music and

@@ -177,8 +177,8 @@ public class ArtistApiTest {
                 .thenReturn(List.of(testAlbum));
         when(jaxbContentService.createJaxbArtist(any(ArtistID3.class), eq(artist), eq(AIRSONIC_USER)))
                 .thenReturn(TestApiUtil.createTestArtistWithAlbumsID3Full(artist.getName()));
-        when(jaxbContentService.createJaxbAlbum(any(AlbumID3.class), eq(testAlbum), eq(AIRSONIC_USER)))
-                .thenReturn(TestApiUtil.createTestAlbumID3());
+        when(jaxbContentService.createJaxbAlbums(any(), any(), eq(AIRSONIC_USER), any()))
+                .thenReturn(List.of(TestApiUtil.createTestAlbumID3()));
 
         String responseBody = mvc.perform(get(endpoint)
                 .param("v", AIRSONIC_API_VERSION)
@@ -427,10 +427,10 @@ public class ArtistApiTest {
                 .thenReturn(List.of(testFolder));
         when(musicIndexService.getIndexedArtists(artists))
                 .thenReturn(indexedArtists);
-        when(jaxbContentService.createJaxbArtist(any(ArtistID3.class), eq(artist1), eq(AIRSONIC_USER)))
-                .thenReturn(TestApiUtil.createTestArtistID3Full(artist1.getName()));
-        when(jaxbContentService.createJaxbArtist(any(ArtistID3.class), eq(artist2), eq(AIRSONIC_USER)))
-                .thenReturn(TestApiUtil.createTestArtistID3Minimum(artist2.getName()));
+        when(jaxbContentService.createJaxbArtists(eq(artists), eq(AIRSONIC_USER), any()))
+                .thenReturn(List.of(
+                        TestApiUtil.createTestArtistID3Full(artist1.getName()),
+                        TestApiUtil.createTestArtistID3Minimum(artist2.getName())));
 
         String responseBody = mvc.perform(get(endpoint)
                 .param("v", AIRSONIC_API_VERSION)
@@ -504,10 +504,10 @@ public class ArtistApiTest {
                 .thenReturn(List.of(testFolder));
         when(musicIndexService.getIndexedArtists(artists))
                 .thenReturn(indexedArtists);
-        when(jaxbContentService.createJaxbArtist(any(ArtistID3.class), eq(artist1), eq(AIRSONIC_USER)))
-                .thenReturn(TestApiUtil.createTestArtistID3Full(artist1.getName()));
-        when(jaxbContentService.createJaxbArtist(any(ArtistID3.class), eq(artist2), eq(AIRSONIC_USER)))
-                .thenReturn(TestApiUtil.createTestArtistID3Minimum(artist2.getName()));
+        when(jaxbContentService.createJaxbArtists(eq(artists), eq(AIRSONIC_USER), any()))
+                .thenReturn(List.of(
+                        TestApiUtil.createTestArtistID3Full(artist1.getName()),
+                        TestApiUtil.createTestArtistID3Minimum(artist2.getName())));
 
         String responseBody = mvc.perform(get(endpoint)
                 .param("v", AIRSONIC_API_VERSION)

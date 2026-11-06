@@ -47,11 +47,17 @@ public class LoggingExceptionResolver implements HandlerExceptionResolver, Order
      * @param e The exception to check
      * @return True if the exception or any of its causes is a "client abort" exception
      */
-    private boolean isClientAbortException(Throwable e) {
+    boolean isClientAbortException(Throwable e) {
         if (e == null) {
             return false;
         }
         if (Util.isInstanceOfClassName(e, "org.apache.catalina.connector.ClientAbortException")) {
+            return true;
+        }
+        // Spring MVC async requests whose response is no longer usable (client disconnected / timed
+        // out while the handler was streaming, e.g. cover art from a slow network mount). This is an
+        // expected condition, not a server error — keep it off the ERROR log.
+        if (Util.isInstanceOfClassName(e, "org.springframework.web.context.request.async.AsyncRequestNotUsableException")) {
             return true;
         }
         return isClientAbortException(e.getCause());

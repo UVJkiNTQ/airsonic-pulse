@@ -173,6 +173,7 @@
             <xs:element name="recordLabels" type="sub:RecordLabel" minOccurs="0" maxOccurs="unbounded"/>  <!-- Added in OpenSubsonic -->
             <xs:element name="discTitles" type="sub:DiscTitle" minOccurs="0" maxOccurs="unbounded"/>  <!-- Added in OpenSubsonic -->
             <xs:element name="replayGain" type="sub:ReplayGain" minOccurs="0"/>  <!-- Added in OpenSubsonic -->
+            <xs:element name="song" type="sub:Child" minOccurs="0" maxOccurs="unbounded"/>  <!-- Added in OpenSubsonic: only populated by /getArtist, other list endpoints omit it -->
         </xs:sequence>
         <xs:attribute name="id" type="xs:string" use="required"/>
         <xs:attribute name="name" type="xs:string" use="required"/>
@@ -211,9 +212,7 @@
     <xs:complexType name="AlbumWithSongsID3">
         <xs:complexContent>
             <xs:extension base="sub:AlbumID3">
-                <xs:sequence>
-                    <xs:element name="song" type="sub:Child" minOccurs="0" maxOccurs="unbounded"/>
-                </xs:sequence>
+                <!-- song now inherited from AlbumID3 (OpenSubsonic extension) -->
             </xs:extension>
         </xs:complexContent>
     </xs:complexType>

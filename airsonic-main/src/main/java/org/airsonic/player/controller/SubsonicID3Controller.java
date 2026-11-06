@@ -50,6 +50,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.util.List;
 import java.util.Map;
 import java.util.SortedMap;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static org.springframework.web.bind.ServletRequestUtils.getIntParameter;
 import static org.springframework.web.bind.ServletRequestUtils.getRequiredIntParameter;
@@ -88,12 +90,22 @@ public class SubsonicID3Controller extends AbstractSubsonicController {
 
         List<org.airsonic.player.domain.Artist> artists = artistService.getAlphabeticalArtists(musicFolders);
         SortedMap<MusicIndex, List<MusicIndex.SortableArtistWithArtist>> indexedArtists = musicIndexService.getIndexedArtists(artists);
+        // Render the whole page in one batched pass (starred date, cover art, rating-eligible
+        // directory MediaFile, user/avg ratings) via a handful of IN queries, instead of the
+        // ~6 per-artist round-trips of the single-item createJaxbArtist — the N+1 that made
+        // getArtists take tens of seconds on libraries with tens of thousands of artists.
+        Map<Integer, ArtistID3> jaxbByArtistId = Map.of();
+        if (!artists.isEmpty()) {
+            jaxbByArtistId = jaxbContentService.createJaxbArtists(artists, username, artist -> new ArtistID3())
+                    .stream()
+                    .collect(Collectors.toMap(a -> Integer.parseInt(a.getId()), Function.identity()));
+        }
         for (Map.Entry<MusicIndex, List<MusicIndex.SortableArtistWithArtist>> entry : indexedArtists.entrySet()) {
             IndexID3 index = new IndexID3();
             result.getIndex().add(index);
             index.setName(entry.getKey().getIndex());
             for (MusicIndex.SortableArtistWithArtist sortableArtist : entry.getValue()) {
-                index.getArtist().add(jaxbContentService.createJaxbArtist(new ArtistID3(), sortableArtist.getArtist(), username));
+                index.getArtist().add(jaxbByArtistId.get(sortableArtist.getArtist().getId()));
             }
         }
 
@@ -107,6 +119,7 @@ public class SubsonicID3Controller extends AbstractSubsonicController {
         request = wrapRequest(request);
 
         String username = securityService.getCurrentUsername(request);
+        Player player = playerService.getPlayer(request, response, username);
         int id = getRequiredIntParameter(request, "id");
         org.airsonic.player.domain.Artist artist = artistService.getArtist(id);
         if (artist == null) {
@@ -116,9 +129,10 @@ public class SubsonicID3Controller extends AbstractSubsonicController {
 
         List<org.airsonic.player.domain.MusicFolder> musicFolders = mediaFolderService.getMusicFoldersForUser(username);
         ArtistWithAlbumsID3 result = jaxbContentService.createJaxbArtist(new ArtistWithAlbumsID3(), artist, username);
-        for (Album album : albumService.getAlbumsByArtist(artist.getName(), musicFolders)) {
-            result.getAlbum().add(jaxbContentService.createJaxbAlbum(new AlbumID3(), album, username));
-        }
+        // OpenSubsonic extension: albums carry their <song> entries (AlbumID3.song), so the whole
+        // discography track list arrives in this single response — no per-album getAlbum round-trips.
+        jaxbContentService.createJaxbAlbums(player, albumService.getAlbumsByArtist(artist.getName(), musicFolders), username, album -> new AlbumID3())
+                .forEach(result.getAlbum()::add);
 
         Response res = createResponse();
         res.setArtist(result);
@@ -210,9 +224,8 @@ public class SubsonicID3Controller extends AbstractSubsonicController {
             throw new SubsonicRESTController.APIException(SubsonicRESTController.ErrorCode.GENERIC, "Invalid list type: " + type);
         }
         AlbumList2 result = new AlbumList2();
-        for (Album album : albums) {
-            result.getAlbum().add(jaxbContentService.createJaxbAlbum(new AlbumID3(), album, username));
-        }
+        jaxbContentService.createJaxbAlbums(albums, username, album -> new AlbumID3())
+                .forEach(result.getAlbum()::add);
         Response res = createResponse();
         res.setAlbumList2(result);
         jaxbWriter.writeResponse(request, response, res);

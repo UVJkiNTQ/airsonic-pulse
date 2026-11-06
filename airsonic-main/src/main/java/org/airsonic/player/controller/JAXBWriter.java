@@ -19,6 +19,9 @@
  */
 package org.airsonic.player.controller;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.google.common.net.MediaType;
 import org.airsonic.player.controller.SubsonicRESTController.APIException;
 import org.airsonic.player.service.VersionService;
@@ -124,6 +127,42 @@ public class JAXBWriter {
         return restProtocolVersion;
     }
 
+    private static final ObjectMapper JSON = new ObjectMapper();
+
+    /**
+     * OpenSubsonic specifies {@code openSubsonicExtensions} as a flat JSON array — a documented
+     * JSON/XML asymmetry (XML keeps the {@code <openSubsonicExtensions>} wrapper element). MOXy
+     * serializes the JAXB wrapper object as {@code { "openSubsonicExtension": [...] }}, which
+     * strict clients such as Symfonium reject ({@code Expected BEGIN_ARRAY but was BEGIN_OBJECT
+     * at path $.subsonic-response.openSubsonicExtensions}). Unwrap to the flat array for JSON/
+     * JSONP when the field is present; all other endpoints keep the original output untouched.
+     */
+    static String unwrapOpenSubsonicExtensions(String json) {
+        try {
+            JsonNode root = JSON.readTree(json);
+            if (!(root instanceof ObjectNode rootNode)) {
+                return json;
+            }
+            JsonNode response = rootNode.get("subsonic-response");
+            if (!(response instanceof ObjectNode responseNode)) {
+                return json;
+            }
+            JsonNode extensions = responseNode.get("openSubsonicExtensions");
+            if (extensions == null || !extensions.isObject()) {
+                return json;
+            }
+            JsonNode list = extensions.get("openSubsonicExtension");
+            if (list == null || !list.isArray()) {
+                return json;
+            }
+            responseNode.set("openSubsonicExtensions", list);
+            return JSON.writerWithDefaultPrettyPrinter().writeValueAsString(rootNode);
+        } catch (IOException x) {
+            LOG.warn("Failed to unwrap openSubsonicExtensions in JSON response", x);
+            return json;
+        }
+    }
+
     public Response createResponse(boolean ok) {
         Response response = new ObjectFactory().createResponse();
         response.setStatus(ok ? ResponseStatus.OK : ResponseStatus.FAILED);
@@ -188,19 +227,62 @@ public class JAXBWriter {
 
         StringWriter writer = new StringWriter();
         try {
-            if (jsonp) {
-                writer.append(jsonpCallback).append('(');
-            }
             marshaller.marshal(new ObjectFactory().createSubsonicResponse(resp), writer);
-            if (jsonp) {
-                writer.append(");");
-            }
         } catch (JAXBException x) {
             LOG.error("Failed to marshal JAXB", x);
             throw new RuntimeException(x);
         }
 
-        return Pair.of(type.toString(), writer.toString());
+        String out = writer.toString();
+        if ((json || jsonp) && resp.getOpenSubsonicExtensions() != null) {
+            out = unwrapOpenSubsonicExtensions(out);
+        }
+        if (jsonp) {
+            out = jsonpCallback + "(" + out + ");";
+        }
+
+        // Defensive sanitization: MOXy writes string values verbatim, so a control character
+        // (e.g. a null byte from mojibake APEv2 tags) lands raw in the response and produces
+        // invalid XML/JSON that strict Subsonic clients (Symfonium, etc.) cannot parse — they
+        // hang waiting for a well-formed document. Replace every XML-invalid character with
+        // U+FFFD so a single bad tag can never corrupt the whole response.
+        return Pair.of(type.toString(), sanitizeInvalidXmlChars(out));
+    }
+
+    /**
+     * Replaces XML 1.0-invalid characters with U+FFFD (replacement character). Valid per
+     * XML 1.0 5th ed: tab (0x09), LF (0x0A), CR (0x0D), 0x20-0xD7FF, 0xE000-0xFFFD, and
+     * supplementary planes 0x10000-0x10FFFF. Surrogate pairs are handled so valid emoji /
+     * supplementary characters survive intact.
+     */
+    static String sanitizeInvalidXmlChars(String value) {
+        if (value == null || value.isEmpty()) {
+            return value;
+        }
+        StringBuilder sb = new StringBuilder(value.length());
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c >= 0xD800 && c <= 0xDBFF && i + 1 < value.length()) {
+                char low = value.charAt(i + 1);
+                if (low >= 0xDC00 && low <= 0xDFFF) {
+                    // Valid surrogate pair (supplementary character) — keep both.
+                    int cp = Character.toCodePoint(c, low);
+                    if (cp >= 0x10000 && cp <= 0x10FFFF) {
+                        sb.append(c).append(low);
+                        i++;
+                        continue;
+                    }
+                }
+            }
+            sb.append(isValidXmlChar(c) ? c : '\uFFFD');
+        }
+        return sb.toString();
+    }
+
+    private static boolean isValidXmlChar(char c) {
+        return c == 0x09 || c == 0x0A || c == 0x0D
+                || (c >= 0x20 && c <= 0xD7FF)
+                || (c >= 0xE000 && c <= 0xFFFD);
     }
 
     public XMLGregorianCalendar convertDate(Instant date) {

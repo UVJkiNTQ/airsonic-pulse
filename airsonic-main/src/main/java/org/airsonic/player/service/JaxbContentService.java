@@ -28,6 +28,8 @@ import org.airsonic.player.domain.MediaFile;
 import org.airsonic.player.domain.Player;
 import org.airsonic.player.domain.Playlist;
 import org.airsonic.player.util.StringUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.subsonic.restapi.AlbumID3;
 import org.subsonic.restapi.ArtistID3;
@@ -39,12 +41,19 @@ import org.subsonic.restapi.ItemGenre;
 import org.subsonic.restapi.RecordLabel;
 import org.subsonic.restapi.ReplayGain;
 
+import javax.sql.DataSource;
+
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.TreeMap;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 public class JaxbContentService {
@@ -60,6 +69,20 @@ public class JaxbContentService {
     private final RatingService ratingService;
     private final SettingsService settingsService;
 
+    private static final Logger LOG = LoggerFactory.getLogger(JaxbContentService.class);
+
+    /**
+     * HSQLDB is measurably bad at the batched multi-column {@code IN} + filesort queries the 03cb23eb
+     * batching introduced (a 400k-row {@code album IN ... AND album_artist IN ...} lookup is ~10x slower
+     * than the same point lookups), while the old per-item point-lookup rendering was fast there. Below
+     * this page size we fall back to the per-item renderers on HSQLDB so the small pages clients use
+     * (20-50) keep the pre-batch speed; larger pages still batch (the N+1 batching was introduced to
+     * kill). MariaDB/Postgres keep batching for every page size.
+     */
+    private static final int HSQLDB_BATCH_THRESHOLD = 150;
+
+    private final boolean hsqlDb;
+
     JaxbContentService(
             JAXBWriter jaxbWriter,
             ArtistService artistService,
@@ -70,7 +93,8 @@ public class JaxbContentService {
             MediaFolderService mediaFolderService,
             TranscodingService transcodingService,
             RatingService ratingService,
-            SettingsService settingsService) {
+            SettingsService settingsService,
+            DataSource dataSource) {
         this.jaxbWriter = jaxbWriter;
         this.artistService = artistService;
         this.coverArtService = coverArtService;
@@ -81,6 +105,33 @@ public class JaxbContentService {
         this.transcodingService = transcodingService;
         this.ratingService = ratingService;
         this.settingsService = settingsService;
+        this.hsqlDb = detectHsqlDb(dataSource);
+    }
+
+    /**
+     * Detect HSQLDB (embedded file DB) from the DataSource metadata. Returns {@code false} for a null
+     * DataSource (unit tests) or when metadata is unavailable, keeping the batched path as the default.
+     */
+    private static boolean detectHsqlDb(DataSource dataSource) {
+        if (dataSource == null) {
+            return false;
+        }
+        try (Connection connection = dataSource.getConnection()) {
+            String productName = connection.getMetaData().getDatabaseProductName();
+            return productName != null && productName.toLowerCase().contains("hsql");
+        } catch (SQLException e) {
+            LOG.warn("Could not determine database product; assuming non-HSQLDB", e);
+            return false;
+        }
+    }
+
+    /**
+     * Whether a page of {@code size} items should use the batched {@code IN}-query renderers. On HSQLDB
+     * small pages go back to per-item point-lookup rendering (much faster there); every other database
+     * batches for all sizes.
+     */
+    private boolean useBatchedRendering(int size) {
+        return !hsqlDb || size > HSQLDB_BATCH_THRESHOLD;
     }
 
     public <T extends ArtistID3> T createJaxbArtist(T jaxbArtist, org.airsonic.player.domain.Artist artist, String username) {
@@ -107,6 +158,26 @@ public class JaxbContentService {
         return jaxbArtist;
     }
 
+    private <T extends ArtistID3> T createJaxbArtist(T jaxbArtist, org.airsonic.player.domain.Artist artist, String username, ArtistRenderContext ctx) {
+        jaxbArtist.setId(String.valueOf(artist.getId()));
+        jaxbArtist.setName(artist.getName());
+        jaxbArtist.setStarred(jaxbWriter.convertDate(ctx.starredDates.get(artist.getId())));
+        jaxbArtist.setAlbumCount(artist.getAlbumCount());
+        CoverArt artistArt = ctx.coverArtByArtistId.get(artist.getId());
+        if (artistArt != null && !CoverArt.NULL_ART.equals(artistArt)) {
+            jaxbArtist.setCoverArt(CoverArtController.ARTIST_COVERART_PREFIX + artist.getId());
+        }
+        jaxbArtist.setMediaType("artist");
+        jaxbArtist.setSortName(artist.getSortName());
+        jaxbArtist.setMusicBrainzId(artist.getMusicBrainzArtistId());
+        MediaFile artistMediaFile = ctx.artistMediaFileByName.get(artist.getName());
+        if (artistMediaFile != null) {
+            jaxbArtist.setUserRating(ctx.userRatings.get(artistMediaFile.getId()));
+            jaxbArtist.setAverageRating(ctx.averageRatings.get(artistMediaFile.getId()));
+        }
+        return jaxbArtist;
+    }
+
     public org.subsonic.restapi.Artist createJaxbArtist(MediaFile artist, String username) {
         org.subsonic.restapi.Artist result = new org.subsonic.restapi.Artist();
         result.setId(String.valueOf(artist.getId()));
@@ -118,30 +189,101 @@ public class JaxbContentService {
         return result;
     }
 
+    /**
+     * Batched renderer for artist LIST endpoints (search3 artist branch, getArtists, starred).
+     * Resolves every artist's starred date, cover art and rating-eligible directory MediaFile with a
+     * handful of {@code IN} queries instead of ~5 round-trips per artist, then renders each artist
+     * identically to {@link #createJaxbArtist(ArtistID3, Artist, String)}.
+     */
+    public <T extends ArtistID3> List<T> createJaxbArtists(List<org.airsonic.player.domain.Artist> artists, String username, Function<org.airsonic.player.domain.Artist, T> factory) {
+        if (artists == null || artists.isEmpty()) {
+            return List.of();
+        }
+        if (!useBatchedRendering(artists.size())) {
+            // HSQLDB small page: per-item point lookups are much faster than the batched IN queries.
+            return artists.stream()
+                    .map(a -> createJaxbArtist(factory.apply(a), a, username))
+                    .toList();
+        }
+        ArtistRenderContext ctx = preloadArtistContext(artists, username);
+        return artists.stream()
+                .map(a -> createJaxbArtist(factory.apply(a), a, username, ctx))
+                .toList();
+    }
+
+    private ArtistRenderContext preloadArtistContext(List<org.airsonic.player.domain.Artist> artists, String username) {
+        Set<Integer> ids = artists.stream().map(org.airsonic.player.domain.Artist::getId).filter(Objects::nonNull).collect(Collectors.toSet());
+        Set<String> names = artists.stream().map(org.airsonic.player.domain.Artist::getName).filter(Objects::nonNull).collect(Collectors.toSet());
+        List<org.airsonic.player.domain.MusicFolder> folders = mediaFolderService.getMusicFoldersForUser(username);
+        Map<Integer, CoverArt> coverArtByArtistId = coverArtService.getArtistArts(ids);
+        Map<String, MediaFile> artistMediaFileByName = mediaFileService.getArtistsByName(names, folders);
+        Map<Integer, Integer> userRatings = ratingService.getRatingsForUser(username, artistMediaFileByName.values());
+        Map<Integer, Double> averageRatings = ratingService.getAverageRatings(artistMediaFileByName.values());
+        return new ArtistRenderContext(artistService.getStarredDates(ids, username), coverArtByArtistId, artistMediaFileByName, userRatings, averageRatings);
+    }
+
+    /**
+     * Per-page preloaded data used by {@link #createJaxbArtists} to avoid per-artist DB round-trips.
+     */
+    static final class ArtistRenderContext {
+        final Map<Integer, Instant> starredDates;
+        final Map<Integer, CoverArt> coverArtByArtistId;
+        final Map<String, MediaFile> artistMediaFileByName;
+        final Map<Integer, Integer> userRatings;
+        final Map<Integer, Double> averageRatings;
+
+        ArtistRenderContext(Map<Integer, Instant> starredDates,
+                Map<Integer, CoverArt> coverArtByArtistId,
+                Map<String, MediaFile> artistMediaFileByName,
+                Map<Integer, Integer> userRatings,
+                Map<Integer, Double> averageRatings) {
+            this.starredDates = starredDates;
+            this.coverArtByArtistId = coverArtByArtistId;
+            this.artistMediaFileByName = artistMediaFileByName;
+            this.userRatings = userRatings;
+            this.averageRatings = averageRatings;
+        }
+    }
+
     public <T extends AlbumID3> T createJaxbAlbum(T jaxbAlbum, Album album, String username) {
-        // The 3-arg overload is used by list endpoints (getAlbumList2, getStarred2, getArtist,
-        // search). Passing null tracks here keeps those paths free of per-album track fetches —
-        // discTitles only populates when the caller already has the album's songs in hand.
-        return createJaxbAlbum(jaxbAlbum, album, username, null);
+        // Load album tracks so discTitles and cover art can be populated.
+        // The single getSongsForAlbum call is shared for both discTitles and the
+        // cover art fallback in the 4-arg overload.
+        List<MediaFile> albumTracks = mediaFileService.getSongsForAlbum(album.getArtist(), album.getName());
+        return createJaxbAlbum(jaxbAlbum, album, username, albumTracks);
     }
 
     public <T extends AlbumID3> T createJaxbAlbum(T jaxbAlbum, Album album, String username, List<MediaFile> albumTracks) {
+        return createJaxbAlbum(jaxbAlbum, album, username, albumTracks, null);
+    }
+
+    private <T extends AlbumID3> T createJaxbAlbum(T jaxbAlbum, Album album, String username, List<MediaFile> albumTracks, AlbumRenderContext ctx) {
         jaxbAlbum.setId(String.valueOf(album.getId()));
         jaxbAlbum.setName(album.getName());
         if (album.getArtist() != null) {
             jaxbAlbum.setArtist(album.getArtist());
-            org.airsonic.player.domain.Artist artist = artistService.getArtist(album.getArtist());
+            org.airsonic.player.domain.Artist artist = ctx != null ? ctx.artistsByName.get(album.getArtist()) : artistService.getArtist(album.getArtist());
             if (artist != null) {
                 jaxbAlbum.setArtistId(String.valueOf(artist.getId()));
             }
         }
-        if (!CoverArt.NULL_ART.equals(coverArtService.getAlbumArt(album.getId()))) {
+        CoverArt albumArt = ctx != null ? ctx.albumArtByAlbumId.get(album.getId()) : coverArtService.getAlbumArt(album.getId());
+        if (albumArt != null && !CoverArt.NULL_ART.equals(albumArt)) {
             jaxbAlbum.setCoverArt(CoverArtController.ALBUM_COVERART_PREFIX + album.getId());
+        } else if (albumTracks != null && !albumTracks.isEmpty()) {
+            // Fallback: use first track's parent directory cover art (same logic as songs)
+            // This works even when cover_art table lacks ALBUM entries (e.g., after fresh scan)
+            MediaFile firstTrack = albumTracks.get(0);
+            MediaFile parent = ctx != null ? ctx.firstTrackParents.get(firstTrack) : mediaFileService.getParentOf(firstTrack);
+            String coverArt = findCoverArt(firstTrack, parent, ctx != null ? ctx.coverArtByMediaFileId : null);
+            if (coverArt != null) {
+                jaxbAlbum.setCoverArt(coverArt);
+            }
         }
         jaxbAlbum.setSongCount(album.getSongCount());
         jaxbAlbum.setDuration((int) Math.round(album.getDuration()));
         jaxbAlbum.setCreated(jaxbWriter.convertDate(album.getCreated()));
-        jaxbAlbum.setStarred(jaxbWriter.convertDate(albumService.getAlbumStarredDate(album.getId(), username)));
+        jaxbAlbum.setStarred(jaxbWriter.convertDate(ctx != null ? ctx.starredDates.get(album.getId()) : albumService.getAlbumStarredDate(album.getId(), username)));
         jaxbAlbum.setPlayCount((long) album.getPlayCount());
         jaxbAlbum.setYear(album.getYear());
         jaxbAlbum.setGenre(album.getGenre());
@@ -165,6 +307,124 @@ public class JaxbContentService {
         }
         jaxbAlbum.setReplayGain(buildReplayGain(album));
         return jaxbAlbum;
+    }
+
+    /**
+     * Batched renderer for album LIST endpoints (search3, getAlbumList2, starred, artist albums). Resolves every
+     * album's tracks in ONE query via {@link MediaFileService#getSongsForAlbums} and feeds them into the 4-arg
+     * {@link #createJaxbAlbum(AlbumID3, Album, String, List)}, so discTitles and the cover-art fallback are preserved
+     * exactly as the per-album 3-arg overload would produce them — but without an N+1 query per album. Albums with no
+     * tracks (null lookup) behave identically to an empty list in the 4-arg overload.
+     */
+    public <T extends AlbumID3> List<T> createJaxbAlbums(List<Album> albums, String username, Function<Album, T> factory) {
+        if (albums == null || albums.isEmpty()) {
+            return List.of();
+        }
+        if (!useBatchedRendering(albums.size())) {
+            // HSQLDB small page: per-item rendering (point lookups) is much faster than batched IN queries.
+            return albums.stream()
+                    .map(a -> createJaxbAlbum(factory.apply(a), a, username))
+                    .toList();
+        }
+        AlbumRenderContext ctx = preloadAlbumContext(albums, username);
+        return albums.stream()
+                .map(a -> createJaxbAlbum(factory.apply(a), a, username, ctx.tracksByAlbum.get(MediaFileService.AlbumKey.of(a)), ctx))
+                .toList();
+    }
+
+    /**
+     * Variant of {@link #createJaxbAlbums(List, String, Function)} that also populates each album's {@code <song>}
+     * entries (used by /getArtist so a client can fetch an artist's whole discography track list in a single request).
+     * Songs reuse the single batched track lookup from {@link #preloadAlbumContext} plus ONE shared child-render
+     * context, so the entire artist renders in a handful of queries regardless of album count. List endpoints that do
+     * not need songs keep using the 3-arg overload.
+     */
+    public <T extends AlbumID3> List<T> createJaxbAlbums(Player player, List<Album> albums, String username, Function<Album, T> factory) {
+        if (albums == null || albums.isEmpty()) {
+            return List.of();
+        }
+        if (!useBatchedRendering(albums.size())) {
+            // HSQLDB small page: per-item point lookups are much faster than the batched IN queries.
+            return albums.stream()
+                    .map(a -> {
+                        List<MediaFile> albumTracks = mediaFileService.getSongsForAlbum(a.getArtist(), a.getName());
+                        T jaxbAlbum = createJaxbAlbum(factory.apply(a), a, username, albumTracks);
+                        if (player != null && albumTracks != null) {
+                            for (MediaFile mf : albumTracks) {
+                                jaxbAlbum.getSong().add(createJaxbChild(player, mf, username));
+                            }
+                        }
+                        return jaxbAlbum;
+                    })
+                    .toList();
+        }
+        AlbumRenderContext ctx = preloadAlbumContext(albums, username);
+        List<MediaFile> allTracks = albums.stream()
+                .map(a -> ctx.tracksByAlbum.get(MediaFileService.AlbumKey.of(a)))
+                .filter(Objects::nonNull)
+                .flatMap(List::stream)
+                .toList();
+        ChildRenderContext childCtx = allTracks.isEmpty() ? null : preloadChildContext(allTracks, username);
+        return albums.stream()
+                .map(a -> {
+                    T jaxbAlbum = createJaxbAlbum(factory.apply(a), a, username, ctx.tracksByAlbum.get(MediaFileService.AlbumKey.of(a)), ctx);
+                    if (player != null) {
+                        List<MediaFile> albumTracks = ctx.tracksByAlbum.get(MediaFileService.AlbumKey.of(a));
+                        if (albumTracks != null) {
+                            for (MediaFile mf : albumTracks) {
+                                jaxbAlbum.getSong().add(createJaxbChild(new Child(), player, mf, username, childCtx));
+                            }
+                        }
+                    }
+                    return jaxbAlbum;
+                })
+                .toList();
+    }
+
+    private AlbumRenderContext preloadAlbumContext(List<Album> albums, String username) {
+        Map<MediaFileService.AlbumKey, List<MediaFile>> tracksByAlbum = mediaFileService.getSongsForAlbums(albums);
+        Set<Integer> ids = albums.stream().map(Album::getId).filter(Objects::nonNull).collect(Collectors.toSet());
+        Set<String> artistNames = albums.stream().map(Album::getArtist).filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<Integer, CoverArt> albumArtByAlbumId = coverArtService.getAlbumArts(ids);
+        Map<String, org.airsonic.player.domain.Artist> artistsByName = artistService.getArtistsByName(artistNames);
+        Map<Integer, Instant> starredDates = albumService.getAlbumStarredDates(ids, username);
+        // The cover_art table rarely has ALBUM rows (fresh scans only write MEDIA_FILE arts), so nearly
+        // every album falls through to the first-track parent fallback. Batch that parent lookup once.
+        List<MediaFile> firstTracks = tracksByAlbum.values().stream()
+                .filter(list -> list != null && !list.isEmpty())
+                .map(list -> list.get(0))
+                .toList();
+        Map<MediaFile, MediaFile> parents = mediaFileService.getParentsOf(firstTracks);
+        Set<Integer> parentIds = parents.values().stream().map(MediaFile::getId).filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<Integer, CoverArt> coverArtByMediaFileId = coverArtService.getMediaFileArts(parentIds);
+        return new AlbumRenderContext(tracksByAlbum, albumArtByAlbumId, artistsByName, starredDates, parents, coverArtByMediaFileId);
+    }
+
+    /**
+     * Per-page preloaded data used by {@link #createJaxbAlbums} to avoid per-album DB round-trips
+     * (artist, album cover art, starred date, and the first-track parent cover-art fallback).
+     */
+    static final class AlbumRenderContext {
+        final Map<MediaFileService.AlbumKey, List<MediaFile>> tracksByAlbum;
+        final Map<Integer, CoverArt> albumArtByAlbumId;
+        final Map<String, org.airsonic.player.domain.Artist> artistsByName;
+        final Map<Integer, Instant> starredDates;
+        final Map<MediaFile, MediaFile> firstTrackParents;
+        final Map<Integer, CoverArt> coverArtByMediaFileId;
+
+        AlbumRenderContext(Map<MediaFileService.AlbumKey, List<MediaFile>> tracksByAlbum,
+                Map<Integer, CoverArt> albumArtByAlbumId,
+                Map<String, org.airsonic.player.domain.Artist> artistsByName,
+                Map<Integer, Instant> starredDates,
+                Map<MediaFile, MediaFile> firstTrackParents,
+                Map<Integer, CoverArt> coverArtByMediaFileId) {
+            this.tracksByAlbum = tracksByAlbum;
+            this.albumArtByAlbumId = albumArtByAlbumId;
+            this.artistsByName = artistsByName;
+            this.starredDates = starredDates;
+            this.firstTrackParents = firstTrackParents;
+            this.coverArtByMediaFileId = coverArtByMediaFileId;
+        }
     }
 
     /**
@@ -297,7 +557,17 @@ public class JaxbContentService {
     }
 
     public <T extends Child> T createJaxbChild(T child, Player player, MediaFile mediaFile, String username) {
-        MediaFile parent = mediaFileService.getParentOf(mediaFile);
+        return createJaxbChild(child, player, mediaFile, username, null);
+    }
+
+    /**
+     * Per-file rendering context preloaded once per page so list endpoints (search3, getAlbum, starred,
+     * now-playing, …) avoid the per-child N+1 round-trips (parent, cover art, starred date, ratings,
+     * album, artist). When {@code ctx} is {@code null} every lookup falls back to the original
+     * per-file service call, preserving behavior for single-item call sites.
+     */
+    private <T extends Child> T createJaxbChild(T child, Player player, MediaFile mediaFile, String username, ChildRenderContext ctx) {
+        MediaFile parent = ctx != null ? ctx.parents.get(mediaFile) : mediaFileService.getParentOf(mediaFile);
         child.setId(String.valueOf(mediaFile.getId()));
         try {
             if (Objects.nonNull(parent) && !mediaFileService.isRoot(parent)) {
@@ -311,7 +581,7 @@ public class JaxbContentService {
         child.setAlbum(mediaFile.getAlbumName());
         child.setArtist(mediaFile.getArtist());
         child.setIsDir(mediaFile.isDirectory());
-        child.setCoverArt(findCoverArt(mediaFile, parent));
+        child.setCoverArt(findCoverArt(mediaFile, parent, ctx));
         child.setYear(mediaFile.getYear());
         child.setBpm(mediaFile.getBpm());
         child.setGenre(mediaFile.getGenre());
@@ -321,16 +591,16 @@ public class JaxbContentService {
             child.getGenres().add(itemGenre);
         }
         child.setCreated(jaxbWriter.convertDate(mediaFile.getCreated()));
-        child.setStarred(jaxbWriter.convertDate(mediaFileService.getMediaFileStarredDate(mediaFile, username)));
-        child.setUserRating(ratingService.getRatingForUser(username, mediaFile));
-        child.setAverageRating(ratingService.getAverageRating(mediaFile));
+        child.setStarred(jaxbWriter.convertDate(ctx != null ? ctx.starredDates.get(mediaFile.getId()) : mediaFileService.getMediaFileStarredDate(mediaFile, username)));
+        child.setUserRating(ctx != null ? ctx.userRatings.get(mediaFile.getId()) : ratingService.getRatingForUser(username, mediaFile));
+        child.setAverageRating(ctx != null ? ctx.averageRatings.get(mediaFile.getId()) : ratingService.getAverageRating(mediaFile));
         child.setPlayCount((long) mediaFile.getPlayCount());
         child.setPlayed(jaxbWriter.convertDate(mediaFile.getLastPlayed()));
         child.setMusicBrainzId(mediaFile.getMusicBrainzRecordingId());
         child.setDisplayArtist(mediaFile.getArtist());
         child.setDisplayAlbumArtist(mediaFile.getAlbumArtist());
         child.setReplayGain(buildReplayGain(mediaFile));
-        for (Contributor contributor : buildContributors(mediaFile)) {
+        for (Contributor contributor : buildContributors(mediaFile, ctx)) {
             child.getContributors().add(contributor);
         }
         if (mediaFile.getMediaType() != null) {
@@ -350,12 +620,12 @@ public class JaxbContentService {
             child.setIsVideo(mediaFile.isVideo());
             child.setPath(mediaFile.getPath());
 
-            Album album = albumService.getAlbumByMediaFile(mediaFile);
+            Album album = ctx != null ? ctx.albumsByKey.get(MediaFileService.AlbumKey.of(mediaFile)) : albumService.getAlbumByMediaFile(mediaFile);
 
             if (album != null) {
                 child.setAlbumId(String.valueOf(album.getId()));
             }
-            org.airsonic.player.domain.Artist artist = artistService.getArtist(mediaFile.getArtist());
+            org.airsonic.player.domain.Artist artist = ctx != null ? ctx.artistsByName.get(mediaFile.getArtist()) : artistService.getArtist(mediaFile.getArtist());
             if (artist != null) {
                 child.setArtistId(String.valueOf(artist.getId()));
             }
@@ -380,7 +650,79 @@ public class JaxbContentService {
         return child;
     }
 
+    /**
+     * Batched renderer for song/directory LIST endpoints (search3 song branch, getRandomSongs, starred,
+     * now-playing, …). Resolves every child's parent, cover art, starred date, ratings, album and artist
+     * with a handful of {@code IN} queries (instead of ~7 round-trips per child), then renders each child
+     * identically to {@link #createJaxbChild(Player, MediaFile, String)}.
+     */
+    public <T extends Child> List<T> createJaxbChildren(Player player, List<MediaFile> mediaFiles, String username, Function<MediaFile, T> factory) {
+        if (mediaFiles == null || mediaFiles.isEmpty()) {
+            return List.of();
+        }
+        if (!useBatchedRendering(mediaFiles.size())) {
+            // HSQLDB small page: per-item point lookups are much faster than the batched IN queries.
+            return mediaFiles.stream()
+                    .map(mf -> createJaxbChild(factory.apply(mf), player, mf, username))
+                    .toList();
+        }
+        ChildRenderContext ctx = preloadChildContext(mediaFiles, username);
+        return mediaFiles.stream()
+                .map(mf -> createJaxbChild(factory.apply(mf), player, mf, username, ctx))
+                .toList();
+    }
+
+    private ChildRenderContext preloadChildContext(List<MediaFile> mediaFiles, String username) {
+        Map<MediaFile, MediaFile> parents = mediaFileService.getParentsOf(mediaFiles);
+        Set<Integer> dirIds = mediaFiles.stream()
+                .map(mf -> mf.isDirectory() ? mf : parents.get(mf))
+                .filter(Objects::nonNull)
+                .map(MediaFile::getId)
+                .collect(Collectors.toSet());
+        Map<Integer, CoverArt> coverArtByMediaFileId = coverArtService.getMediaFileArts(dirIds);
+        Map<Integer, Instant> starredDates = mediaFileService.getMediaFileStarredDates(mediaFiles, username);
+        Map<Integer, Integer> userRatings = ratingService.getRatingsForUser(username, mediaFiles);
+        Map<Integer, Double> averageRatings = ratingService.getAverageRatings(mediaFiles);
+        Map<MediaFileService.AlbumKey, Album> albumsByKey = albumService.getAlbumsByMediaFiles(mediaFiles);
+        Map<String, org.airsonic.player.domain.Artist> artistsByName = artistService.getArtistsByName(
+                mediaFiles.stream().map(MediaFile::getArtist).filter(Objects::nonNull).collect(Collectors.toSet()));
+        return new ChildRenderContext(parents, coverArtByMediaFileId, starredDates, userRatings, averageRatings, albumsByKey, artistsByName);
+    }
+
+    /**
+     * Per-page preloaded data used by {@link #createJaxbChildren} to avoid per-child DB round-trips.
+     */
+    static final class ChildRenderContext {
+        final Map<MediaFile, MediaFile> parents;
+        final Map<Integer, CoverArt> coverArtByMediaFileId;
+        final Map<Integer, Instant> starredDates;
+        final Map<Integer, Integer> userRatings;
+        final Map<Integer, Double> averageRatings;
+        final Map<MediaFileService.AlbumKey, Album> albumsByKey;
+        final Map<String, org.airsonic.player.domain.Artist> artistsByName;
+
+        ChildRenderContext(Map<MediaFile, MediaFile> parents,
+                Map<Integer, CoverArt> coverArtByMediaFileId,
+                Map<Integer, Instant> starredDates,
+                Map<Integer, Integer> userRatings,
+                Map<Integer, Double> averageRatings,
+                Map<MediaFileService.AlbumKey, Album> albumsByKey,
+                Map<String, org.airsonic.player.domain.Artist> artistsByName) {
+            this.parents = parents;
+            this.coverArtByMediaFileId = coverArtByMediaFileId;
+            this.starredDates = starredDates;
+            this.userRatings = userRatings;
+            this.averageRatings = averageRatings;
+            this.albumsByKey = albumsByKey;
+            this.artistsByName = artistsByName;
+        }
+    }
+
     List<Contributor> buildContributors(MediaFile mediaFile) {
+        return buildContributors(mediaFile, null);
+    }
+
+    List<Contributor> buildContributors(MediaFile mediaFile, ChildRenderContext ctx) {
         List<org.airsonic.player.domain.Contributor> records = Contributors.split(mediaFile.getContributors());
         if (records.isEmpty()) {
             return List.of();
@@ -390,14 +732,18 @@ public class JaxbContentService {
             Contributor jaxb = new Contributor();
             jaxb.setRole(record.role());
             jaxb.setSubRole(record.subRole());
-            jaxb.setArtist(createJaxbArtistByName(record.name()));
+            jaxb.setArtist(createJaxbArtistByName(record.name(), ctx));
             result.add(jaxb);
         }
         return result;
     }
 
     ArtistID3 createJaxbArtistByName(String name) {
-        org.airsonic.player.domain.Artist artist = artistService.getArtist(name);
+        return createJaxbArtistByName(name, null);
+    }
+
+    ArtistID3 createJaxbArtistByName(String name, ChildRenderContext ctx) {
+        org.airsonic.player.domain.Artist artist = ctx != null ? ctx.artistsByName.get(name) : artistService.getArtist(name);
         if (artist != null) {
             ArtistID3 jaxb = new ArtistID3();
             jaxb.setId(String.valueOf(artist.getId()));
@@ -463,9 +809,20 @@ public class JaxbContentService {
     }
 
     private String findCoverArt(MediaFile mediaFile, MediaFile parent) {
+        return findCoverArt(mediaFile, parent, (Map<Integer, CoverArt>) null);
+    }
+
+    private String findCoverArt(MediaFile mediaFile, MediaFile parent, ChildRenderContext ctx) {
+        return findCoverArt(mediaFile, parent, ctx != null ? ctx.coverArtByMediaFileId : null);
+    }
+
+    private String findCoverArt(MediaFile mediaFile, MediaFile parent, Map<Integer, CoverArt> coverArtByMediaFileId) {
         MediaFile dir = mediaFile.isDirectory() ? mediaFile : parent;
-        if (dir != null && !CoverArt.NULL_ART.equals(coverArtService.getMediaFileArt(dir.getId()))) {
-            return String.valueOf(dir.getId());
+        if (dir != null) {
+            CoverArt art = coverArtByMediaFileId != null ? coverArtByMediaFileId.get(dir.getId()) : coverArtService.getMediaFileArt(dir.getId());
+            if (art != null && !CoverArt.NULL_ART.equals(art)) {
+                return String.valueOf(dir.getId());
+            }
         }
         return null;
     }

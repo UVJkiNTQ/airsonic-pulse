@@ -32,6 +32,7 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -51,6 +52,8 @@ public interface MediaFileRepository extends JpaRepository<MediaFile, Integer> {
     public List<MediaFile> findByMediaTypeInAndPresentFalse(Iterable<MediaType> mediaTypes);
 
     public List<MediaFile> findByMediaTypeInAndArtistAndPresentTrue(List<MediaType> mediaTypes, String artist, Pageable page);
+
+    public List<MediaFile> findByFolderInAndMediaTypeAndArtistInAndPresentTrue(Iterable<MusicFolder> folders, MediaType mediaType, Iterable<String> artists);
 
     public List<MediaFile> findByFolder(MusicFolder folder);
 
@@ -117,6 +120,24 @@ public interface MediaFileRepository extends JpaRepository<MediaFile, Integer> {
     public List<MediaFile> findByAlbumArtistAndAlbumNameAndMediaTypeInAndPresentTrue(String albumArtist, String albumName,
             List<MediaType> mediaTypes, Sort sort);
 
+    /**
+     * Batched equivalent of {@link #findByAlbumArtistAndAlbumNameAndMediaTypeInAndPresentTrue} for a whole page of
+     * albums: resolves every present audio track whose (albumArtist, album) pair is in the given sets in ONE query,
+     * so list endpoints (search3, getAlbumList2, ...) avoid an N+1 round-trip per album.
+     */
+    @Query("""
+            SELECT m FROM MediaFile m
+            WHERE m.present = true
+              AND m.mediaType IN :types
+              AND m.albumName IN :albumNames
+              AND m.albumArtist IN :artistNames
+            ORDER BY m.albumArtist, m.albumName, m.discNumber, m.trackNumber
+            """)
+    public List<MediaFile> findByAlbumArtistInAndAlbumNameInAndMediaTypeInAndPresentTrue(
+            @Param("artistNames") Collection<String> artistNames,
+            @Param("albumNames") Collection<String> albumNames,
+            @Param("types") Collection<MediaType> types);
+
 
     public Optional<MediaFile> findByPathAndFolderAndStartPosition(String path, MusicFolder folder, Double startPosition);
 
@@ -143,5 +164,16 @@ public interface MediaFileRepository extends JpaRepository<MediaFile, Integer> {
     @Transactional
     @Query("UPDATE MediaFile m SET m.present = false, m.childrenLastUpdated = :childrenLastUpdated WHERE m.lastScanned < :lastScanned")
     public void markNonPresent(@Param("childrenLastUpdated") Instant childrenLastUpdated, @Param("lastScanned") Instant lastScanned);
+
+    @Modifying
+    @Transactional
+    @Query("UPDATE MediaFile m SET m.present = false, m.childrenLastUpdated = :childrenLastUpdated WHERE m.folder.id IN :folderIds AND m.lastScanned < :lastScanned")
+    public void markNonPresentByFolderIds(@Param("folderIds") List<Integer> folderIds, @Param("childrenLastUpdated") Instant childrenLastUpdated, @Param("lastScanned") Instant lastScanned);
+
+    @Query("SELECT COALESCE(SUM(m.fileSize), 0) FROM MediaFile m WHERE m.folder IN :folders AND m.mediaType = :mediaType AND m.present = true")
+    public long sumFileSizeByFolderInAndMediaTypeAndPresentTrue(@Param("folders") List<MusicFolder> folders, @Param("mediaType") MediaType mediaType);
+
+    @Query("SELECT COALESCE(SUM(m.duration), 0.0) FROM MediaFile m WHERE m.folder IN :folders AND m.mediaType = :mediaType AND m.present = true")
+    public double sumDurationByFolderInAndMediaTypeAndPresentTrue(@Param("folders") List<MusicFolder> folders, @Param("mediaType") MediaType mediaType);
 
 }

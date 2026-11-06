@@ -39,9 +39,15 @@ import jakarta.annotation.Nonnull;
 import jakarta.annotation.Nullable;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 public class ArtistService {
@@ -127,6 +133,44 @@ public class ArtistService {
     }
 
     /**
+     * Batches {@link #getArtist(String)} for a set of artist names into a single {@code IN} query,
+     * populating the by-name cache for the misses. Names with no artist record are absent.
+     */
+    public Map<String, Artist> getArtistsByName(Collection<String> artistNames) {
+        if (artistNames == null || artistNames.isEmpty()) {
+            return Map.of();
+        }
+        Set<String> names = artistNames.stream().filter(StringUtils::hasLength).collect(Collectors.toSet());
+        if (names.isEmpty()) {
+            return Map.of();
+        }
+        // Warm the cache for already-known names and collect the misses.
+        Set<String> missing = new HashSet<>();
+        Map<String, Artist> result = new HashMap<>();
+        for (String name : names) {
+            Optional<Artist> cached = artistByNameCache.get(name);
+            if (cached != null) {
+                cached.ifPresent(artist -> result.put(name, artist));
+            } else {
+                missing.add(name);
+            }
+        }
+        if (!missing.isEmpty()) {
+            for (Artist artist : artistRepository.findByNameIn(missing)) {
+                artistByNameCache.put(artist.getName(), Optional.of(artist));
+                result.put(artist.getName(), artist);
+            }
+            // Cache explicit negatives too so repeated calls stay single-query.
+            for (String name : missing) {
+                if (!result.containsKey(name)) {
+                    artistByNameCache.put(name, Optional.empty());
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
      * Get artists by music folders and pagination
      *
      * @param musicFolders music folders. If null or empty, return empty list
@@ -201,6 +245,21 @@ public class ArtistService {
     }
 
     /**
+     * Batches {@link #getStarredDate(Integer, String)} for a whole page of artists into a single
+     * {@code IN} query keyed by artist id. Artists that are not starred are absent.
+     */
+    @Transactional(readOnly = true)
+    public Map<Integer, Instant> getStarredDates(Collection<Integer> artistIds, String username) {
+        if (artistIds == null || artistIds.isEmpty() || !StringUtils.hasLength(username)) {
+            return Map.of();
+        }
+        return starredArtistRepository.findByArtistIdInAndUsername(artistIds, username)
+                .stream()
+                .filter(sa -> sa.getArtist() != null)
+                .collect(Collectors.toMap(sa -> sa.getArtist().getId(), StarredArtist::getCreated, (a, b) -> a));
+    }
+
+    /**
      * Expunge artists that are not present
      */
     @Transactional
@@ -222,15 +281,58 @@ public class ArtistService {
     }
 
     /**
-     * Save artist
+     * Mark artists that are not present only within specified folders
+     *
+     * @param folderIds folder IDs to restrict the mark to
+     * @param lastScanned last scanned date
+     */
+    @Transactional
+    public void markNonPresent(List<Integer> folderIds, Instant lastScanned) {
+        if (artistRepository.existsByFolderIdInAndLastScannedBeforeAndPresentTrue(folderIds, lastScanned)) {
+            artistRepository.markNonPresentByFolderIds(folderIds, lastScanned);
+        }
+    }
+
+    /**
+     * Save artist.
+     * <p>
+     * If the artist has no ID (new entity), first checks whether an artist with
+     * the same name already exists to avoid unique constraint violations
+     * (e.g., from Unicode variation in the name string).
      *
      * @param artist artist to save
      * @return saved artist
      */
     @Transactional
     public Artist save(Artist artist) {
-        artistRepository.save(artist);
-        return artist;
+        if (artist.getId() == null && artist.getName() != null) {
+            Artist existing = artistRepository.findByName(artist.getName()).orElse(null);
+            if (existing != null) {
+                if (artist.getSortName() != null) {
+                    existing.setSortName(artist.getSortName());
+                }
+                if (artist.getMusicBrainzArtistId() != null) {
+                    existing.setMusicBrainzArtistId(artist.getMusicBrainzArtistId());
+                }
+                if (artist.getLastScanned() != null) {
+                    existing.setLastScanned(artist.getLastScanned());
+                }
+                if (artist.getFolder() != null) {
+                    existing.setFolder(artist.getFolder());
+                }
+                if (artist.getArt() != null) {
+                    existing.setArt(artist.getArt());
+                }
+                existing.setPresent(artist.isPresent());
+                existing.setAlbumCount(artist.getAlbumCount());
+                Artist saved = artistRepository.save(existing);
+                // Propagate the ID back to the original artist object so callers
+                // (e.g., updateArtist → indexManager.index) can use artist.getId()
+                artist.setId(saved.getId());
+                return saved;
+            }
+        }
+        return artistRepository.save(artist);
     }
 
     /**

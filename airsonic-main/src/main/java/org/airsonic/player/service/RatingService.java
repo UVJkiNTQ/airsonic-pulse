@@ -32,11 +32,14 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static java.util.stream.Collectors.groupingBy;
@@ -140,6 +143,44 @@ public class RatingService {
             return null;
         }
         return userRatingRepository.findOptByUsernameAndMediaFileId(username, mediaFile.getId()).map(UserRating::getRating).orElse(null);
+    }
+
+    /**
+     * Batches {@link #getRatingForUser(String, MediaFile)} for a whole page of media files into a
+     * single {@code IN} query keyed by media file id. Files without a user rating are absent.
+     */
+    @Transactional(readOnly = true)
+    public Map<Integer, Integer> getRatingsForUser(String username, Collection<MediaFile> mediaFiles) {
+        if (username == null || mediaFiles == null || mediaFiles.isEmpty()) {
+            return Map.of();
+        }
+        Set<Integer> ids = mediaFiles.stream().map(MediaFile::getId).filter(Objects::nonNull).collect(Collectors.toSet());
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        return userRatingRepository.findByUsernameAndMediaFileIdIn(username, ids)
+                .stream()
+                .collect(Collectors.toMap(UserRating::getMediaFileId, UserRating::getRating, (a, b) -> a));
+    }
+
+    /**
+     * Batches {@link #getAverageRating(MediaFile)} for a whole page of media files into a single
+     * grouped {@code IN} query keyed by media file id. Files without ratings are absent.
+     */
+    @Transactional(readOnly = true)
+    public Map<Integer, Double> getAverageRatings(Collection<MediaFile> mediaFiles) {
+        if (mediaFiles == null || mediaFiles.isEmpty()) {
+            return Map.of();
+        }
+        Set<Integer> ids = mediaFiles.stream().map(MediaFile::getId).filter(Objects::nonNull).collect(Collectors.toSet());
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<Integer, Double> result = new HashMap<>();
+        for (Object[] row : userRatingRepository.getAverageRatingByMediaFileIdIn(ids)) {
+            result.put(((Number) row[0]).intValue(), ((Number) row[1]).doubleValue());
+        }
+        return result;
     }
 
     /**

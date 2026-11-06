@@ -16,10 +16,16 @@ import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 @Service
 public class AlbumService {
@@ -67,6 +73,27 @@ public class AlbumService {
             return null;
         }
         return albumRepository.findByArtistAndName(mediaFile.getAlbumArtist(), mediaFile.getAlbumName()).orElse(null);
+    }
+
+    /**
+     * Batches {@link #getAlbumByMediaFile(MediaFile)} for a whole page of media files into a single
+     * {@code IN} query keyed by {@link MediaFileService.AlbumKey}. Files whose album cannot be
+     * resolved are absent from the map.
+     */
+    public Map<MediaFileService.AlbumKey, Album> getAlbumsByMediaFiles(Collection<MediaFile> mediaFiles) {
+        if (mediaFiles == null || mediaFiles.isEmpty()) {
+            return Map.of();
+        }
+        Set<String> artists = mediaFiles.stream().map(MediaFile::getAlbumArtist).filter(Objects::nonNull).collect(Collectors.toSet());
+        Set<String> names = mediaFiles.stream().map(MediaFile::getAlbumName).filter(Objects::nonNull).collect(Collectors.toSet());
+        if (artists.isEmpty() || names.isEmpty()) {
+            return Map.of();
+        }
+        Map<MediaFileService.AlbumKey, Album> byKey = new HashMap<>();
+        for (Album album : albumRepository.findByArtistInAndNameIn(artists, names)) {
+            byKey.putIfAbsent(new MediaFileService.AlbumKey(album.getArtist(), album.getName()), album);
+        }
+        return byKey;
     }
 
     /**
@@ -288,6 +315,21 @@ public class AlbumService {
     }
 
     /**
+     * Batches {@link #getAlbumStarredDate(Integer, String)} for a whole page of albums into a single
+     * {@code IN} query keyed by album id. Albums that are not starred are absent.
+     */
+    @Transactional(readOnly = true)
+    public Map<Integer, Instant> getAlbumStarredDates(Collection<Integer> albumIds, String username) {
+        if (albumIds == null || albumIds.isEmpty() || !StringUtils.hasLength(username)) {
+            return Map.of();
+        }
+        return albumRepository.findByIdInAndStarredAlbumsUsername(albumIds, username)
+                .stream()
+                .filter(a -> !a.getStarredAlbums().isEmpty())
+                .collect(Collectors.toMap(Album::getId, a -> a.getStarredAlbums().get(0).getCreated(), (x, y) -> x));
+    }
+
+    /**
      * Get starred albums for user
      *
      * @param username     username to get starred albums for
@@ -371,14 +413,87 @@ public class AlbumService {
     }
 
     /**
-     * Save album to database
+     * mark albums as non present only within specified folders
+     *
+     * @param folderIds folder IDs to restrict the mark to
+     * @param lastScanned last scanned date
+     */
+    @Transactional
+    public void markNonPresent(List<Integer> folderIds, Instant lastScanned) {
+        if (albumRepository.existsByFolderIdInAndLastScannedBeforeAndPresentTrue(folderIds, lastScanned)) {
+            albumRepository.markNonPresentByFolderIds(folderIds, lastScanned);
+        }
+    }
+
+    /**
+     * Save album to database.
+     * <p>
+     * If the album has no ID (new entity), first checks whether an album with the
+     * same artist and name already exists to avoid unique constraint violations
+     * (e.g., from multi-disc sets or Unicode variation in artist/name strings).
      *
      * @param album album to save
+     * @return saved album
      */
     @Transactional
     public Album save(Album album) {
-        albumRepository.save(album);
-        return album;
+        if (album.getId() == null && album.getArtist() != null && album.getName() != null) {
+            Album existing = albumRepository.findByArtistAndName(album.getArtist(), album.getName()).orElse(null);
+            if (existing != null) {
+                // Merge fields from the new album into the existing one
+                if (album.getPath() != null) {
+                    existing.setPath(album.getPath());
+                }
+                if (album.getSortName() != null) {
+                    existing.setSortName(album.getSortName());
+                }
+                if (album.getYear() != null) {
+                    existing.setYear(album.getYear());
+                }
+                if (album.getReleaseDate() != null) {
+                    existing.setReleaseDate(album.getReleaseDate());
+                }
+                if (album.getOriginalReleaseDate() != null) {
+                    existing.setOriginalReleaseDate(album.getOriginalReleaseDate());
+                }
+                if (album.getCompilation() != null) {
+                    existing.setCompilation(album.getCompilation());
+                }
+                if (album.getReleaseTypes() != null) {
+                    existing.setReleaseTypes(album.getReleaseTypes());
+                }
+                if (album.getRecordLabels() != null) {
+                    existing.setRecordLabels(album.getRecordLabels());
+                }
+                if (album.getGenre() != null) {
+                    existing.setGenre(album.getGenre());
+                }
+                if (album.getMusicBrainzReleaseId() != null) {
+                    existing.setMusicBrainzReleaseId(album.getMusicBrainzReleaseId());
+                }
+                if (album.getCreated() != null) {
+                    existing.setCreated(album.getCreated());
+                }
+                if (album.getLastScanned() != null) {
+                    existing.setLastScanned(album.getLastScanned());
+                }
+                if (album.getFolder() != null) {
+                    existing.setFolder(album.getFolder());
+                }
+                if (album.getArt() != null) {
+                    existing.setArt(album.getArt());
+                }
+                existing.setPresent(album.isPresent());
+                existing.setDuration(album.getDuration());
+                existing.setSongCount(album.getSongCount());
+                Album saved = albumRepository.save(existing);
+                // Propagate the ID back to the original album object so callers
+                // (e.g., updateAlbum → indexManager.index) can use album.getId()
+                album.setId(saved.getId());
+                return saved;
+            }
+        }
+        return albumRepository.save(album);
     }
 
 }

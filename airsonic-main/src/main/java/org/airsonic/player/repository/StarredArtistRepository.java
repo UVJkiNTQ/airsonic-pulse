@@ -33,6 +33,8 @@ public interface StarredArtistRepository extends JpaRepository<StarredArtist, In
 
     public Optional<StarredArtist> findByArtistIdAndUsername(Integer artistId, String username);
 
+    public List<StarredArtist> findByArtistIdInAndUsername(Iterable<Integer> artistIds, String username);
+
     public List<StarredArtist> findByUsername(String username);
 
     public List<StarredArtist> findByUsernameAndArtistFolderInAndArtistPresentTrue(String username, Iterable<MusicFolder> folders, Sort sort);

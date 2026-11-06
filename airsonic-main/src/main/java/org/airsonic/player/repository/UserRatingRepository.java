@@ -35,12 +35,17 @@ public interface UserRatingRepository extends JpaRepository<UserRating, UserRati
 
     public Optional<UserRating> findOptByUsernameAndMediaFileId(String username, int mediaFileId);
 
+    public List<UserRating> findByUsernameAndMediaFileIdIn(String username, Iterable<Integer> mediaFileIds);
+
     public Integer countByUsernameAndMediaFileIdIn(String username, Iterable<Integer> mediaFileIds);
 
     public List<UserRating> findByUsernameAndRatingBetween(String username, Integer fromRating, Integer toRating);
 
     @Query("SELECT AVG(u.rating) FROM UserRating u WHERE u.mediaFileId = :mediaFileId")
     public Double getAverageRatingByMediaFileId(@Param("mediaFileId") int mediaFileId);
+
+    @Query("SELECT u.mediaFileId, AVG(u.rating) FROM UserRating u WHERE u.mediaFileId IN :mediaFileIds GROUP BY u.mediaFileId")
+    public List<Object[]> getAverageRatingByMediaFileIdIn(@Param("mediaFileIds") Iterable<Integer> mediaFileIds);
 
     @Transactional
     public void deleteByUsernameAndMediaFileId(String username, int mediaFileId);

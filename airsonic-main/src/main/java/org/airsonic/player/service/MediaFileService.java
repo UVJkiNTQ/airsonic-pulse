@@ -40,6 +40,7 @@ import org.airsonic.player.repository.MusicFileInfoRepository;
 import org.airsonic.player.repository.OffsetBasedPageRequest;
 import org.airsonic.player.repository.StarredMediaFileRepository;
 import org.airsonic.player.service.cache.MediaFileCache;
+import org.airsonic.player.service.cue.CueParser;
 import org.airsonic.player.service.metadata.Chapter;
 import org.airsonic.player.service.metadata.FFmpegParser;
 import org.airsonic.player.service.metadata.JaudiotaggerParser;
@@ -50,7 +51,6 @@ import org.airsonic.player.util.FileUtil;
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
-import org.digitalmediaserver.cuelib.CueParser;
 import org.digitalmediaserver.cuelib.CueSheet;
 import org.digitalmediaserver.cuelib.FileData;
 import org.digitalmediaserver.cuelib.Position;
@@ -425,6 +425,42 @@ public class MediaFileService {
     }
 
     /**
+     * Stable key identifying an (albumArtist, album) pair. Used to group batched track lookups so list
+     * endpoints can render a whole page of albums with a single query instead of an N+1 per-album
+     * {@link #getSongsForAlbum} round-trip (which made search3 / getAlbumList2 pages take seconds on
+     * large libraries).
+     */
+    public record AlbumKey(String albumArtist, String albumName) {
+        public static AlbumKey of(Album album) {
+            return new AlbumKey(album.getArtist(), album.getName());
+        }
+
+        public static AlbumKey of(MediaFile mediaFile) {
+            return new AlbumKey(mediaFile.getAlbumArtist(), mediaFile.getAlbumName());
+        }
+    }
+
+    /**
+     * Returns every track for the given albums in a single query, grouped by {@link AlbumKey}. Only
+     * present audio tracks are returned, matching {@link #getSongsForAlbum}. Albums without tracks
+     * simply have no entry in the map.
+     */
+    public Map<AlbumKey, List<MediaFile>> getSongsForAlbums(List<Album> albums) {
+        if (CollectionUtils.isEmpty(albums)) {
+            return Map.of();
+        }
+        Set<String> albumNames = albums.stream().map(Album::getName).filter(Objects::nonNull).collect(Collectors.toSet());
+        Set<String> artistNames = albums.stream().map(Album::getArtist).filter(Objects::nonNull).collect(Collectors.toSet());
+        if (albumNames.isEmpty()) {
+            return Map.of();
+        }
+        return mediaFileRepository
+                .findByAlbumArtistInAndAlbumNameInAndMediaTypeInAndPresentTrue(artistNames, albumNames, MediaType.audioTypes())
+                .stream()
+                .collect(Collectors.groupingBy(m -> new AlbumKey(m.getAlbumArtist(), m.getAlbumName())));
+    }
+
+    /**
      * Returns songs in a genre.
      *
      * @param offset      Number of songs to skip.
@@ -512,6 +548,23 @@ public class MediaFileService {
         }
         // return the first result
         return results.getFirst();
+    }
+
+    /**
+     * Batches {@link #getArtistByName(String, List)} for a whole page of artist names into a single
+     * query keyed by artist name. Artists with no directory media file are absent.
+     */
+    public Map<String, MediaFile> getArtistsByName(Collection<String> artistNames, List<MusicFolder> folders) {
+        if (CollectionUtils.isEmpty(folders) || artistNames == null || artistNames.isEmpty()) {
+            return Map.of();
+        }
+        Set<String> names = artistNames.stream().filter(Objects::nonNull).collect(Collectors.toSet());
+        if (names.isEmpty()) {
+            return Map.of();
+        }
+        return mediaFileRepository.findByFolderInAndMediaTypeAndArtistInAndPresentTrue(folders, MediaType.DIRECTORY, names)
+                .stream()
+                .collect(Collectors.toMap(MediaFile::getArtist, Function.identity(), (a, b) -> a));
     }
 
     /**
@@ -790,15 +843,64 @@ public class MediaFileService {
         return starredMediaFileRepository.findByUsernameAndMediaFile(username, mediaFile).map(StarredMediaFile::getCreated).orElse(null);
     }
 
+    /**
+     * Batches {@link #getMediaFileStarredDate(MediaFile, String)} for a whole page of media files into a
+     * single {@code IN} query keyed by media file id. Files that are not starred are absent.
+     */
+    public Map<Integer, Instant> getMediaFileStarredDates(List<MediaFile> mediaFiles, String username) {
+        if (mediaFiles == null || mediaFiles.isEmpty()) {
+            return Map.of();
+        }
+        return starredMediaFileRepository
+                .findByUsernameAndMediaFileIn(username, mediaFiles)
+                .stream()
+                .collect(Collectors.toMap(smf -> smf.getMediaFile().getId(), StarredMediaFile::getCreated, (a, b) -> a));
+    }
+
     public void populateStarredDate(List<MediaFile> mediaFiles, String username) {
+        if (mediaFiles == null || mediaFiles.isEmpty()) {
+            return;
+        }
+        Map<MediaFile, Instant> byMediaFile = starredMediaFileRepository
+                .findByUsernameAndMediaFileIn(username, mediaFiles)
+                .stream()
+                .collect(Collectors.toMap(StarredMediaFile::getMediaFile, StarredMediaFile::getCreated, (a, b) -> a));
         for (MediaFile mediaFile : mediaFiles) {
-            populateStarredDate(mediaFile, username);
+            mediaFile.setStarredDate(byMediaFile.get(mediaFile));
         }
     }
 
     public void populateStarredDate(MediaFile mediaFile, String username) {
         Instant starredDate = starredMediaFileRepository.findByUsernameAndMediaFile(username, mediaFile).map(StarredMediaFile::getCreated).orElse(null);
         mediaFile.setStarredDate(starredDate);
+    }
+
+    /**
+     * Batches the {@code getParentOf} lookup for a whole page of media files into a handful of
+     * {@code IN} queries (one per distinct music folder) instead of one round-trip per file. Files
+     * whose parent cannot be resolved are simply absent from the returned map.
+     */
+    public Map<MediaFile, MediaFile> getParentsOf(List<MediaFile> mediaFiles) {
+        if (mediaFiles == null || mediaFiles.isEmpty()) {
+            return Map.of();
+        }
+        Map<MediaFile, MediaFile> result = new HashMap<>();
+        mediaFiles.stream()
+                .filter(mf -> mf.getParentPath() != null)
+                .collect(Collectors.groupingBy(MediaFile::getFolder))
+                .forEach((folder, files) -> {
+                    Set<String> parentPaths = files.stream().map(MediaFile::getParentPath).collect(Collectors.toSet());
+                    Map<String, MediaFile> byPath = mediaFileRepository.findByFolderAndPathIn(folder, parentPaths)
+                            .stream()
+                            .collect(Collectors.toMap(MediaFile::getPath, Function.identity(), (a, b) -> a));
+                    files.forEach(mf -> {
+                        MediaFile parent = byPath.get(mf.getParentPath());
+                        if (parent != null) {
+                            result.put(mf, parent);
+                        }
+                    });
+                });
+        return result;
     }
 
     @Nullable
@@ -871,39 +973,49 @@ public class MediaFileService {
 
         // cue tracks
         if (isEnableCueIndexing) {
+            // External .cue files take priority over embedded .flac cue sheets: a FLAC that
+            // carries an embedded CUE and also has an external .cue sidecar should be indexed
+            // from the external one. Split the two groups, process external first, and silently
+            // skip (DEBUG) any embedded cue whose base file was already claimed by an external cue.
+            Map<String, CueSheet> externalCueSheets = new LinkedHashMap<>();
+            Map<String, CueSheet> embeddedCueSheets = new LinkedHashMap<>();
+            cueSheets.forEach((indexPath, cueSheet) -> {
+                if (FilenameUtils.getExtension(indexPath).equalsIgnoreCase("cue")) {
+                    externalCueSheets.put(indexPath, cueSheet);
+                } else {
+                    embeddedCueSheets.put(indexPath, cueSheet);
+                }
+            });
+            Set<String> claimedBasePaths = new HashSet<>();
+
             // Sequential outer stream: each FILE block mutates shared scan state (bareFiles.remove,
             // storedChildrenMap) without synchronization, so iterating cue sheets in parallel was a
             // latent data race. A directory holds few cue sheets, so sequential costs nothing.
-            List<MediaFile> indexedTracks = cueSheets.entrySet().stream().flatMap(e -> {
-                String indexPath = e.getKey();
-                CueSheet cueSheet = e.getValue();
-
-                // One FILE block per audio file: resolve each block to its own base media file and
-                // materialise that block's tracks against it (multifile CUE support).
-                return cueSheet.getFileData().stream().flatMap(fileData -> {
-                    String filePath = fileData.getFile();
-                    MediaFile base = bareFiles.remove(FilenameUtils.getName(filePath));
-
-                    if (Objects.nonNull(base)) {
-                        base.setIndexPath(indexPath); // update indexPath in mediaFile
-                        Instant mediaChanged = FileUtil.lastModified(base.getFullPath());
-                        Instant cueChanged = FileUtil.lastModified(base.getFullIndexPath());
-                        base.setChanged(mediaChanged.compareTo(cueChanged) >= 0 ? mediaChanged : cueChanged);
-                        updateMediaFile(base);
-                        List<MediaFile> tracks = createIndexedTracks(base, cueSheet, fileData);
-                        // remove stored children that are now indexed
-                        tracks.forEach(t -> storedChildrenMap.remove(Pair.of(t.getPath(), t.getStartPosition())));
-                        tracks.add(base);
-                        return tracks.stream();
-                    } else {
-                        // A missing/unresolvable FILE block is skipped without aborting the scan; the
-                        // remaining blocks and cue sheets still materialise.
-                        LOG.warn("Could not find base file '{}' for cue sheet {}", filePath, indexPath);
-                        return Stream.<MediaFile>empty();
-                    }
-                });
-            }).toList();
+            List<MediaFile> indexedTracks = externalCueSheets.entrySet().stream()
+                    .flatMap(e -> processCueSheetEntry(e, parent, folder, bareFiles, storedChildrenMap, claimedBasePaths))
+                    .toList();
+            indexedTracks = Stream.concat(
+                    indexedTracks.stream(),
+                    embeddedCueSheets.entrySet().stream()
+                            .flatMap(e -> processCueSheetEntry(e, parent, folder, bareFiles, storedChildrenMap, claimedBasePaths)))
+                    .toList();
             result.addAll(indexedTracks);
+
+            // Override parent directory metadata from CUE.
+            // CUE sheet metadata takes priority over audio file embedded tags
+            // for single-file + CUE albums.
+            if (!indexedTracks.isEmpty()) {
+                MediaFile firstTrack = indexedTracks.get(0);
+                if (firstTrack.getAlbumName() != null) {
+                    parent.setAlbumName(firstTrack.getAlbumName());
+                    // Also set title so getName() uses it instead of folder name
+                    parent.setTitle(firstTrack.getAlbumName());
+                }
+                if (firstTrack.getAlbumArtist() != null) {
+                    parent.setArtist(firstTrack.getAlbumArtist());
+                    parent.setAlbumArtist(firstTrack.getAlbumArtist());
+                }
+            }
         }
 
         // m4b audio books
@@ -950,6 +1062,82 @@ public class MediaFileService {
         updateMediaFile(parent);
 
         return result;
+    }
+
+    /**
+     * Resolves and materialises the indexed tracks for a single cue sheet entry — one FILE block
+     * per audio file (multifile CUE support). External {@code .cue} sheets are processed before
+     * embedded {@code .flac} cue sheets: {@code claimedBasePaths} records every base file already
+     * indexed by an earlier (external) cue sheet, so an embedded cue that would re-index the same
+     * base is skipped silently at DEBUG instead of logging a WARN.
+     */
+    private Stream<MediaFile> processCueSheetEntry(Map.Entry<String, CueSheet> entry,
+            MediaFile parent, MusicFolder folder,
+            Map<String, MediaFile> bareFiles,
+            Map<Pair<String, Double>, MediaFile> storedChildrenMap,
+            Set<String> claimedBasePaths) {
+        String indexPath = entry.getKey();
+        CueSheet cueSheet = entry.getValue();
+        // One FILE block per audio file: resolve each block to its own base media file and
+        // materialise that block's tracks against it (multifile CUE support).
+        return cueSheet.getFileData().stream().flatMap(fileData -> {
+            String filePath = fileData.getFile();
+            // Prefer a bare-name match (existing behaviour: single-file CUE albums whose
+            // FILE block names the sibling audio file in the same directory).
+            MediaFile base = bareFiles.remove(FilenameUtils.getName(filePath));
+
+            if (Objects.isNull(base)) {
+                // Fall back to resolving the FILE block's path relative to the CUE's parent
+                // directory. Many multi-disc albums (disc 1/01 … .flac) reference audio files in
+                // subdirectories, which are never direct children of the parent and therefore
+                // absent from `bareFiles`. getMediaFile resolves DB + disk (and creates the
+                // MediaFile row if needed), so those bases index correctly too. Windows-authored
+                // CUE sheets separate subdirectories with '\' — normalize to '/' first so the
+                // path resolves on POSIX hosts where '\' is a legal filename character.
+                Path baseRelative = Paths.get(parent.getPath()).resolve(normalizeCueFilePath(filePath)).normalize();
+                base = getMediaFile(baseRelative, folder);
+                if (Objects.nonNull(base)) {
+                    bareFiles.remove(FilenameUtils.getName(base.getPath()));
+                }
+            }
+
+            if (Objects.nonNull(base)) {
+                if (!claimedBasePaths.add(base.getPath())) {
+                    // Base file already indexed by an earlier (external) cue sheet — this embedded
+                    // cue is redundant. Silently skip rather than re-indexing or logging a WARN.
+                    LOG.debug("Embedded cue sheet {} superseded by external cue for base file {}", indexPath, base.getPath());
+                    return Stream.<MediaFile>empty();
+                }
+                base.setIndexPath(indexPath); // update indexPath in mediaFile
+                Instant mediaChanged = FileUtil.lastModified(base.getFullPath());
+                Instant cueChanged = FileUtil.lastModified(base.getFullIndexPath());
+                base.setChanged(mediaChanged.compareTo(cueChanged) >= 0 ? mediaChanged : cueChanged);
+                updateMediaFile(base);
+                List<MediaFile> tracks = createIndexedTracks(base, cueSheet, fileData);
+                // remove stored children that are now indexed
+                tracks.forEach(t -> storedChildrenMap.remove(Pair.of(t.getPath(), t.getStartPosition())));
+                tracks.add(base);
+                return tracks.stream();
+            } else {
+                // A missing/unresolvable FILE block is skipped without aborting the scan; the
+                // remaining blocks and cue sheets still materialise.
+                LOG.warn("Could not find base file '{}' for cue sheet {}", filePath, indexPath);
+                return Stream.<MediaFile>empty();
+            }
+        });
+    }
+
+    /**
+     * Normalizes Windows-style backslash path separators in a CUE FILE reference to forward
+     * slashes. CUE sheets authored on Windows commonly reference audio files in subdirectories
+     * with '\' (e.g. {@code disc 1\01-Track.flac}); on POSIX hosts '\' is a legal filename
+     * character, so without normalization the reference would be treated as a literal filename.
+     *
+     * @param filePath the raw FILE reference from a CUE sheet
+     * @return the reference with '\' replaced by '/'
+     */
+    static String normalizeCueFilePath(String filePath) {
+        return filePath.replace('\\', '/');
     }
 
     /**
@@ -1230,7 +1418,7 @@ public class MediaFileService {
                     track.setPresent(true);
                     track.setStartPosition(chapter.getStartTimeSeconds());
                     track.setDuration(duration);
-                    track.setTrackNumber(chapter.getId());
+                    track.setTrackNumber(chapter.getId().intValue());
                     track.setDiscNumber(base.getDiscNumber());
                     track.setGenre(base.getGenre());
                     track.setYear(base.getYear());
@@ -1456,41 +1644,15 @@ public class MediaFileService {
             String ext = FilenameUtils.getExtension(cueFile.toString()).toLowerCase();
             switch (ext) {
                 case "cue":
-                    Charset cs = Charset.forName("UTF-8"); // default to UTF-8
-                    // attempt to detect encoding for cueFile, fallback to UTF-8
-                    int THRESHOLD = 35; // 0-100, the higher the more certain the guess
-                    CharsetDetector cd = new CharsetDetector();
-                    try (FileInputStream fis = new FileInputStream(cueFile.toFile());
-                        BufferedInputStream bis = new BufferedInputStream(fis);) {
-                        cd.setText(bis);
-                        CharsetMatch cm = cd.detect();
-                        if (cm != null && cm.getConfidence() > THRESHOLD) {
-                            cs = Charset.forName(cm.getName());
-                        }
-                        LOG.debug("Detected charset for cuesheet file {}: Charset detected as {}", cueFile, cs);
-                        bis.mark(3);
-
-                        // check for BOM
-                        byte[] bom = new byte[3];
-                        int bytesRead = bis.read(bom, 0, 3);
-                        if (!hasBOM(bom, bytesRead)) {
-                            bis.reset();
-                        }
-                        cueSheet = CueParser.parse(bis, cs);
-                    } catch (IOException e) {
-                        LOG.warn("Defaulting to UTF-8 for cuesheet {}", cueFile);
-                    }
-                    if (cueSheet != null) {
-                        if (cueSheet.getMessages().stream().filter(m -> m.toString().toLowerCase().contains("warning"))
-                                .map(m -> {
-                                    LOG.warn("Parsing {} at line {} : {}", cueFile, m.getLineNumber(), m.getMessage());
-                                    return m;
-                                }).findFirst().isPresent()) {
-                            cueSheet = null;
-                        }
-                    }
+                    cueSheet = parseCueFile(cueFile);
                     break;
                 case "flac":
+                    // External .cue sidecar wins over the embedded cue sheet. If a sibling .cue
+                    // parses successfully, the embedded cue is redundant — skip it so a failing
+                    // embedded parse doesn't surface a spurious cuelib ERROR.
+                    if (siblingExternalCueParses(cueFile)) {
+                        return null;
+                    }
                     cueSheet = FLACReader.getCueSheet(cueFile);
                     break;
                 default:
@@ -1516,6 +1678,78 @@ public class MediaFileService {
      */
     private CueSheet getCueSheet(MediaFile media) {
         return getCueSheet(media.getFullIndexPath());
+    }
+
+    /**
+     * Parses an external {@code .cue} file, detecting BOM/charset and dropping sheets that carry
+     * parser warnings.
+     *
+     * @param cueFile absolute path of the cue file
+     * @return parsed cue sheet, or {@code null} if unreadable or warning-bearing
+     */
+    private CueSheet parseCueFile(Path cueFile) {
+        Charset cs = Charset.forName("UTF-8"); // default to UTF-8
+        // Detect encoding and BOM from the file
+        boolean bomFound = false;
+        int THRESHOLD = 35; // 0-100, the higher the more certain the guess
+        CueSheet cueSheet = null;
+        try (FileInputStream fis = new FileInputStream(cueFile.toFile());
+             BufferedInputStream bis = new BufferedInputStream(fis)) {
+            // Check for BOM first
+            bis.mark(3);
+            byte[] bom = new byte[3];
+            int bytesRead = bis.read(bom, 0, 3);
+            if (hasBOM(bom, bytesRead)) {
+                bomFound = true;
+                cs = Charset.forName("UTF-8");
+                LOG.debug("Detected BOM for cuesheet file {}, forcing UTF-8", cueFile);
+            } else {
+                bis.reset();
+            }
+
+            // Detect encoding (CharsetDetector consumes the stream)
+            if (!bomFound) {
+                CharsetDetector cd = new CharsetDetector();
+                cd.setText(bis);
+                CharsetMatch cm = cd.detect();
+                if (cm != null && cm.getConfidence() > THRESHOLD) {
+                    cs = Charset.forName(cm.getName());
+                }
+                LOG.debug("Detected charset for cuesheet file {}: Charset detected as {}", cueFile, cs);
+            }
+
+            // Parse: for BOM files use positioned stream, for others re-open
+            if (bomFound) {
+                cueSheet = CueParser.parse(bis, cs);
+            } else {
+                cueSheet = CueParser.parse(cueFile, cs);
+            }
+        } catch (IOException e) {
+            LOG.warn("Error parsing cuesheet {}, defaulting to UTF-8", cueFile, e);
+        }
+        if (cueSheet != null) {
+            if (cueSheet.getMessages().stream().filter(m -> m.toString().toLowerCase().contains("warning"))
+                    .map(m -> {
+                        LOG.warn("Parsing {} at line {} : {}", cueFile, m.getLineNumber(), m.getMessage());
+                        return m;
+                    }).findFirst().isPresent()) {
+                cueSheet = null;
+            }
+        }
+        return cueSheet;
+    }
+
+    /**
+     * Returns {@code true} when a sibling {@code .cue} file next to the given FLAC parses into a
+     * usable cue sheet — in which case the embedded cue is redundant and may be skipped.
+     */
+    private boolean siblingExternalCueParses(Path flacFile) {
+        Path sibling = flacFile.resolveSibling(FilenameUtils.getBaseName(flacFile.toString()) + ".cue");
+        if (!Files.isRegularFile(sibling)) {
+            return false;
+        }
+        CueSheet cue = parseCueFile(sibling);
+        return cue != null && cue.getFileData() != null && !cue.getFileData().isEmpty();
     }
 
     /**
@@ -1789,6 +2023,16 @@ public class MediaFileService {
     @Transactional
     public void markNonPresent(Instant lastScanned) {
         mediaFileRepository.markNonPresent(Instant.ofEpochMilli(1), lastScanned);
+    }
+
+    /**
+     * mark media files non present only within specified folders
+     * @param folderIds folder IDs to restrict the mark to
+     * @param lastScanned last scanned time before which media files are marked non present
+     */
+    @Transactional
+    public void markNonPresent(List<Integer> folderIds, Instant lastScanned) {
+        mediaFileRepository.markNonPresentByFolderIds(folderIds, Instant.ofEpochMilli(1), lastScanned);
     }
 
     /**

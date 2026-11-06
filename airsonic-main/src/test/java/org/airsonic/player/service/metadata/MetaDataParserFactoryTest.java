@@ -53,7 +53,7 @@ public class MetaDataParserFactoryTest {
         // The null MediaFolderService is intentional: only isApplicable and getRawMetaData
         // are exercised here, neither of which touches the folder service.
         factory = new MetaDataParserFactory(List.of(
-                new JaudiotaggerParser(null),
+                new JaudiotaggerParser(null, null),
                 new FFmpegParser()));
     }
 
@@ -123,6 +123,25 @@ public class MetaDataParserFactoryTest {
     public void testOpusStaysOnFFmpegBecauseJaudiotagger301HasNoOpusReader_issue258() throws Exception {
         assertEquals(FFmpegParser.class, factory.getParser(file("a.opus")).getClass(),
                 "opus must route to FFmpegParser — jaudiotagger 3.0.1 has no Opus reader (see #258)");
+    }
+
+    /**
+     * Lock test: {@code .aac} must continue to route through {@link FFmpegParser}, NOT
+     * {@link JaudiotaggerParser}. Mirror of the opus case: jaudiotagger 3.0.1 has no
+     * AAC entry in {@code SupportedFileFormat} and no reader registered for the suffix,
+     * so {@code AudioFileIO.read(File)} throws
+     * {@code CannotReadException: No Reader associated with this extension:aac} during
+     * scanning, leaving duration/bitrate NULL in the DB. AAC metadata (duration, bitrate,
+     * etc.) is served by FFmpegParser via ffprobe instead.
+     *
+     * <p>If this test ever fails because a future diff added {@code "aac"} back to
+     * {@code applicableFormats}, revisit the upstream gap first — the library must gain
+     * an AAC reader (or be replaced) before that promotion is safe.
+     */
+    @Test
+    public void testAacRoutesToFFmpegBecauseJaudiotagger301HasNoAacReader() throws Exception {
+        assertEquals(FFmpegParser.class, factory.getParser(file("a.aac")).getClass(),
+                "aac must route to FFmpegParser — jaudiotagger 3.0.1 has no AAC reader");
     }
 
     // ----- general contract -----

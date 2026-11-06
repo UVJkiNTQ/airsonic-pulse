@@ -30,11 +30,19 @@ import org.jaudiotagger.tag.mp4.Mp4Tag;
 import org.jaudiotagger.tag.mp4.field.Mp4TagReverseDnsField;
 import org.jaudiotagger.tag.vorbiscomment.VorbisCommentTag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Unit test of the ReplayGain and multi-value tag-field extraction in {@link JaudiotaggerParser}.
@@ -134,7 +142,7 @@ public class JaudiotaggerParserTestCase {
         VorbisCommentTag tag = VorbisCommentTag.createNewTag();
         tag.setField(MetaDataParser.RG_TRACK_GAIN, "-6.50 dB");
         tag.setField(MetaDataParser.R128_TRACK_GAIN, "256"); // would be 6.0 dB after shift
-        JaudiotaggerParser parser = new JaudiotaggerParser(null);
+        JaudiotaggerParser parser = new JaudiotaggerParser(null, null);
         assertEquals(Double.valueOf(-6.5), parser.parseTrackGain(tag));
     }
 
@@ -142,7 +150,7 @@ public class JaudiotaggerParserTestCase {
     public void testParseTrackGainFallsBackToR128WhenOnlyR128() throws Exception {
         VorbisCommentTag tag = VorbisCommentTag.createNewTag();
         tag.setField(MetaDataParser.R128_TRACK_GAIN, "0"); // 5.0 dB after shift
-        JaudiotaggerParser parser = new JaudiotaggerParser(null);
+        JaudiotaggerParser parser = new JaudiotaggerParser(null, null);
         assertEquals(Double.valueOf(5.0), parser.parseTrackGain(tag));
     }
 
@@ -151,7 +159,7 @@ public class JaudiotaggerParserTestCase {
         VorbisCommentTag tag = VorbisCommentTag.createNewTag();
         tag.setField(MetaDataParser.RG_ALBUM_GAIN, "-4.25 dB");
         tag.setField(MetaDataParser.R128_ALBUM_GAIN, "256");
-        JaudiotaggerParser parser = new JaudiotaggerParser(null);
+        JaudiotaggerParser parser = new JaudiotaggerParser(null, null);
         assertEquals(Double.valueOf(-4.25), parser.parseAlbumGain(tag));
     }
 
@@ -159,14 +167,14 @@ public class JaudiotaggerParserTestCase {
     public void testParseAlbumGainFallsBackToR128WhenOnlyR128() throws Exception {
         VorbisCommentTag tag = VorbisCommentTag.createNewTag();
         tag.setField(MetaDataParser.R128_ALBUM_GAIN, "-512"); // 3.0 dB after shift
-        JaudiotaggerParser parser = new JaudiotaggerParser(null);
+        JaudiotaggerParser parser = new JaudiotaggerParser(null, null);
         assertEquals(Double.valueOf(3.0), parser.parseAlbumGain(tag));
     }
 
     @Test
     public void testParseTrackGainNeitherTagPresentReturnsNull() {
         VorbisCommentTag tag = VorbisCommentTag.createNewTag();
-        JaudiotaggerParser parser = new JaudiotaggerParser(null);
+        JaudiotaggerParser parser = new JaudiotaggerParser(null, null);
         assertNull(parser.parseTrackGain(tag));
         assertNull(parser.parseAlbumGain(tag));
     }
@@ -546,5 +554,102 @@ public class JaudiotaggerParserTestCase {
                 new Contributor("performer", "Guitar", "Jimi Hendrix"),
                 new Contributor("performer", "Bass", "Noel Redding")),
                 JaudiotaggerParser.getContributors(tag));
+    }
+
+    // ----------------------------------------------------------------------------------------
+    // ffmpeg fallback (fixes the "() [] .wav" family). jaudiotagger's WavTagReader throws
+    // java.nio.BufferUnderflowException on WAVs that end with trailing bytes after the data
+    // chunk (no LIST/INFO tag chunk to consume them) — a valid file ffprobe reads fine. When
+    // jaudiotagger throws, JaudiotaggerParser must delegate to FFmpegParser so duration/bitrate
+    // (and any tags ffprobe sees) still land on the MediaFile.
+    // ----------------------------------------------------------------------------------------
+
+    @TempDir
+    Path tmp;
+
+    /**
+     * Builds a minimal PCM WAV (RIFF/fmt/data with a few stray trailing bytes) that is small
+     * enough for jaudiotagger to refuse outright with a CannotReadException — reproducing a
+     * "jaudiotagger cannot read this WAV" scan failure like the real-world tagless 24-bit WAVs
+     * that hit the WavTagReader buffer overrun.
+     */
+    private static byte[] taglessWavWithStrayTrailingBytes() {
+        ByteBuffer bb = ByteBuffer.allocate(44 + 4 + 4);
+        bb.order(ByteOrder.LITTLE_ENDIAN);
+        bb.put("RIFF".getBytes(StandardCharsets.US_ASCII));
+        bb.putInt(36 + 4 + 4); // RIFF size: 12 header + 24 fmt + 8 data hdr + 4 body + 4 stray
+        bb.put("WAVE".getBytes(StandardCharsets.US_ASCII));
+        bb.put("fmt ".getBytes(StandardCharsets.US_ASCII));
+        bb.putInt(16);                 // fmt chunk size
+        bb.putShort((short) 1);        // PCM
+        bb.putShort((short) 2);        // channels
+        bb.putInt(44100);              // sample rate
+        bb.putInt(44100 * 2 * 2);      // byte rate
+        bb.putShort((short) 4);        // block align
+        bb.putShort((short) 16);       // bits per sample
+        bb.put("data".getBytes(StandardCharsets.US_ASCII));
+        bb.putInt(4);                  // data chunk size
+        bb.put(new byte[4]);           // silent data body
+        bb.put(new byte[4]);           // stray trailing bytes
+        return bb.array();
+    }
+
+    @Test
+    public void testWavTagParseFailureFallsBackToFfmpeg() throws Exception {
+        Path wav = tmp.resolve("tagless-with-stray-bytes.wav");
+        Files.write(wav, taglessWavWithStrayTrailingBytes());
+
+        // Sanity: this fixture must be one jaudiotagger refuses to read (any throwable — e.g. its
+        // "too small to be a valid audio file" guard or the WavTagReader buffer overrun), so the
+        // fallback below is genuinely exercised. If this ever stops throwing, the fixture no longer
+        // represents the production failure this test guards.
+        org.junit.jupiter.api.Assertions.assertThrows(Throwable.class,
+                () -> org.jaudiotagger.audio.AudioFileIO.read(wav.toFile()));
+
+        AtomicBoolean fallbackCalled = new AtomicBoolean(false);
+        FFmpegParser stub = new FFmpegParser() {
+            @Override
+            public MetaData getRawMetaData(Path file) {
+                fallbackCalled.set(true);
+                MetaData md = new MetaData();
+                md.setDuration(242.7);
+                md.setBitRate(2116);
+                return md;
+            }
+        };
+        JaudiotaggerParser parser = new JaudiotaggerParser(null, stub);
+
+        MetaData result = parser.getRawMetaData(wav);
+
+        assertTrue(fallbackCalled.get(),
+                "a WAV jaudiotagger cannot read should fall back to ffmpeg");
+        assertEquals(242.7, result.getDuration(), 0.001);
+        assertEquals(2116, result.getBitRate());
+    }
+
+    @Test
+    public void testUnreadableAudioFallsBackToFfmpeg() throws Exception {
+        Path wav = tmp.resolve("not-a-wav.wav");
+        Files.write(wav, "this is definitely not a wav file".getBytes(StandardCharsets.US_ASCII));
+
+        AtomicBoolean fallbackCalled = new AtomicBoolean(false);
+        FFmpegParser stub = new FFmpegParser() {
+            @Override
+            public MetaData getRawMetaData(Path file) {
+                fallbackCalled.set(true);
+                MetaData md = new MetaData();
+                md.setDuration(10.0);
+                md.setBitRate(128);
+                return md;
+            }
+        };
+        JaudiotaggerParser parser = new JaudiotaggerParser(null, stub);
+
+        MetaData result = parser.getRawMetaData(wav);
+
+        assertTrue(fallbackCalled.get(),
+                "a file jaudiotagger cannot read at all should fall back to ffmpeg");
+        assertEquals(10.0, result.getDuration(), 0.001);
+        assertEquals(128, result.getBitRate());
     }
 }

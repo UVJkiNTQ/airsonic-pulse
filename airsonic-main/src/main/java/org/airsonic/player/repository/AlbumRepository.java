@@ -21,6 +21,10 @@ public interface AlbumRepository extends JpaRepository<Album, Integer> {
 
     public Optional<Album> findByArtistAndName(String artist, String name);
 
+    public List<Album> findByIdInAndStarredAlbumsUsername(Iterable<Integer> ids, String username);
+
+    public List<Album> findByArtistInAndNameIn(Iterable<String> artists, Iterable<String> names);
+
     public List<Album> findByName(String artist);
 
     public List<Album> findByArtistAndFolderInAndPresentTrue(String artist, Iterable<MusicFolder> musicFolders);
@@ -54,5 +58,12 @@ public interface AlbumRepository extends JpaRepository<Album, Integer> {
     @Modifying
     @Query("UPDATE Album a SET a.present = false WHERE a.lastScanned < :lastScanned")
     public void markNonPresent(@Param("lastScanned") Instant lastScanned);
+
+    public boolean existsByFolderIdInAndLastScannedBeforeAndPresentTrue(@Param("folderIds") List<Integer> folderIds, @Param("lastScanned") Instant lastScanned);
+
+    @Transactional
+    @Modifying
+    @Query("UPDATE Album a SET a.present = false WHERE a.folder.id IN :folderIds AND a.lastScanned < :lastScanned")
+    public void markNonPresentByFolderIds(@Param("folderIds") List<Integer> folderIds, @Param("lastScanned") Instant lastScanned);
 
 }

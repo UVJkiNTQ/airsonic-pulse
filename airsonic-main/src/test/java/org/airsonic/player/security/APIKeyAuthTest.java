@@ -384,10 +384,10 @@ public class APIKeyAuthTest {
                 .param("f", "json")
                 .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.subsonic-response.openSubsonicExtensions.openSubsonicExtension[*].name")
+                .andExpect(jsonPath("$.subsonic-response.openSubsonicExtensions[*].name")
                         .value(org.hamcrest.Matchers.hasItem("apiKeyAuthentication")))
                 .andExpect(jsonPath(
-                        "$.subsonic-response.openSubsonicExtensions.openSubsonicExtension[?(@.name=='apiKeyAuthentication')].versions[0]")
+                        "$.subsonic-response.openSubsonicExtensions[?(@.name=='apiKeyAuthentication')].versions[0]")
                         .value(org.hamcrest.Matchers.hasItem(1)));
     }
 }

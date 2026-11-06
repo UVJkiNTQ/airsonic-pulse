@@ -19,7 +19,6 @@
  */
 package org.airsonic.player.controller;
 
-import org.airsonic.player.domain.Album;
 import org.airsonic.player.domain.MediaFile;
 import org.airsonic.player.domain.PlayStatus;
 import org.airsonic.player.domain.Player;
@@ -188,9 +187,8 @@ public class SubsonicAnnotationController extends AbstractSubsonicController {
         for (org.airsonic.player.domain.Artist artist : artistService.getStarredArtists(username, musicFolders)) {
             result.getArtist().add(jaxbContentService.createJaxbArtist(new ArtistID3(), artist, username));
         }
-        for (Album album : albumService.getStarredAlbums(username, musicFolders)) {
-            result.getAlbum().add(jaxbContentService.createJaxbAlbum(new AlbumID3(), album, username));
-        }
+        jaxbContentService.createJaxbAlbums(albumService.getStarredAlbums(username, musicFolders), username, album -> new AlbumID3())
+                .forEach(result.getAlbum()::add);
         for (MediaFile song : mediaFileService.getStarredSongs(0, Integer.MAX_VALUE, username, musicFolders)) {
             result.getSong().add(jaxbContentService.createJaxbChild(player, song, username));
         }

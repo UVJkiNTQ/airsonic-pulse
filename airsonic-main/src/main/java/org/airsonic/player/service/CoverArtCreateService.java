@@ -61,7 +61,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class CoverArtCreateService {
@@ -91,6 +95,24 @@ public class CoverArtCreateService {
     private TranscodingService transcodingService;
 
     private static final Logger LOG = LoggerFactory.getLogger(CoverArtCreateService.class);
+
+    /**
+     * Extensions that are plain image files whose bytes can be streamed directly without parsing.
+     * Cover art rows pointing at these (the vast majority) must never be sent through JAudioTagger,
+     * whose {@code AudioFileIO.read} fully parses an audio container — extremely slow for FLAC/MP3
+     * when called once per {@code getCoverArt} request.
+     */
+    private static final Set<String> IMAGE_EXTENSIONS = Set.of("jpg", "jpeg", "png", "gif", "webp", "bmp");
+
+    /**
+     * Cache of embedded artwork extracted from audio files (FLAC/MP3/M4A/…), keyed by
+     * {@code path + lastModified}. Without it, every {@code getCoverArt} request re-parses the whole
+     * audio container to extract the tag image — the dominant cost of cover art serving on libraries
+     * whose cover_art table points at audio files.
+     */
+    private final Map<String, CachedArtwork> embeddedArtworkCache = new ConcurrentHashMap<>();
+
+    private record CachedArtwork(Instant lastModified, byte[] data, String mimeType) { }
 
     /**
      * Create a cover art request for an album.
@@ -318,11 +340,21 @@ public class CoverArtCreateService {
      * the embedded album art is returned. In addition returns the mime type
      */
     public Pair<InputStream, String> getImageInputStreamWithType(Path file) throws IOException {
+        String extension = FilenameUtils.getExtension(file.toString()).toLowerCase();
+        // Plain image files: stream the bytes directly. Never send these through JAudioTagger —
+        // isImageAvailable() is false for them, but routing them here avoids the extra stat and
+        // keeps the hot path to a single Files.newInputStream.
+        if (IMAGE_EXTENSIONS.contains(extension)) {
+            LOG.trace("Reading artwork from file {}", file);
+            return Pair.of(
+                    new BufferedInputStream(Files.newInputStream(file)),
+                    StringUtil.getMimeType(extension));
+        }
         try {
             if (JaudiotaggerParser.isImageAvailable(file)) {
                 LOG.trace("Using Jaudio Tagger for reading artwork from {}", file);
-                Artwork artwork = JaudiotaggerParser.getArtwork(file);
-                return Pair.of(new ByteArrayInputStream(artwork.getBinaryData()), artwork.getMimeType());
+                CachedArtwork cached = getCachedArtwork(file);
+                return Pair.of(new ByteArrayInputStream(cached.data()), cached.mimeType());
             } else {
                 LOG.trace("Reading artwork from file {}", file);
                 return Pair.of(
@@ -334,6 +366,28 @@ public class CoverArtCreateService {
             LOG.debug("Could not read artwork from file {}", file);
             return Pair.of(null, null);
         }
+    }
+
+    /**
+     * Returns cached embedded artwork for an audio file, parsing it (once) if absent or stale.
+     */
+    private CachedArtwork getCachedArtwork(Path file) throws Exception {
+        Instant lastModified = Files.getLastModifiedTime(file).toInstant();
+        String key = file.toString();
+        CachedArtwork cached = embeddedArtworkCache.get(key);
+        if (cached != null && cached.lastModified().equals(lastModified)) {
+            return cached;
+        }
+        Artwork artwork = JaudiotaggerParser.getArtwork(file);
+        if (artwork == null) {
+            throw new IOException("No artwork in " + file);
+        }
+        byte[] data = artwork.getBinaryData();
+        CachedArtwork fresh = new CachedArtwork(lastModified, data, artwork.getMimeType());
+        // Bounded by library size; a ConcurrentHashMap is fine — worst case a few tens of thousands
+        // of small-byte arrays for a very large library.
+        embeddedArtworkCache.put(key, fresh);
+        return fresh;
     }
 
     private InputStream getImageInputStreamForVideo(MediaFile mediaFile, int width, int height, int offset)

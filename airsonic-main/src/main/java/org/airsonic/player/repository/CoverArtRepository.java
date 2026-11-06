@@ -16,6 +16,8 @@ public interface CoverArtRepository extends JpaRepository<CoverArt, CoverArtKey>
 
     public Optional<CoverArt> findByEntityTypeAndEntityId(EntityType entityType, Integer entityId);
 
+    public List<CoverArt> findByEntityTypeAndEntityIdIn(EntityType entityType, Iterable<Integer> entityIds);
+
     public List<CoverArt> findByFolder(MusicFolder folder);
 
     public List<CoverArt> findByFolderAndPathStartsWith(MusicFolder folder, String path);

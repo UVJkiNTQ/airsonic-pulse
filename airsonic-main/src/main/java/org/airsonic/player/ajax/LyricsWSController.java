@@ -23,6 +23,7 @@ import org.airsonic.player.domain.MediaFile;
 import org.airsonic.player.service.LyricsService;
 import org.airsonic.player.service.MediaFileService;
 import org.airsonic.player.service.SecurityService;
+import org.airsonic.player.service.lyrics.NeteaseLyricsProvider;
 import org.airsonic.player.util.StringUtil;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.http.client.HttpResponseException;
@@ -68,18 +69,27 @@ public class LyricsWSController {
 
     private final MediaFileService mediaFileService;
 
+    private final NeteaseLyricsProvider neteaseLyricsProvider;
+
     public LyricsWSController(
         LyricsService lyricsService,
         SecurityService securityService,
-        MediaFileService mediaFileService) {
+        MediaFileService mediaFileService,
+        NeteaseLyricsProvider neteaseLyricsProvider) {
         this.lyricsService = lyricsService;
         this.securityService = securityService;
         this.mediaFileService = mediaFileService;
+        this.neteaseLyricsProvider = neteaseLyricsProvider;
     }
 
 
     /**
      * Returns lyrics for the given song and artist.
+     *
+     * <p>
+     * NetEase Cloud Music is tried first because it returns synced LRC; chartlyrics.com is kept as
+     * the legacy fallback. A successful fetch is persisted against the media file, so subsequent
+     * opens are served from the database.
      *
      * @return The lyrics, never <code>null</code> .
      */
@@ -87,26 +97,50 @@ public class LyricsWSController {
     @SendToUser(broadcast = false)
     public LyricsStatus getLyrics(Principal user, LyricsGetRequest req) {
 
-        String artist = req.getArtist();
-        String song = req.getSong();
+        String artist = StringUtils.trimToNull(req.getArtist());
+        String song = StringUtils.trimToNull(req.getSong());
 
         LyricsStatus status = new LyricsStatus();
+
+        MediaFile mediaFile = null;
+        if (req.getId() != null) {
+            mediaFile = mediaFileService.getMediaFile(req.getId());
+            if (mediaFile != null && !securityService.isFolderAccessAllowed(mediaFile, user.getName())) {
+                mediaFile = null;
+            }
+        }
+        if (mediaFile != null) {
+            if (song == null) {
+                song = mediaFile.getTitle();
+            }
+            if (artist == null) {
+                artist = mediaFile.getArtist() != null ? mediaFile.getArtist() : mediaFile.getAlbumArtist();
+            }
+        }
+        if (StringUtils.isBlank(song)) {
+            LOG.warn("No song title, cannot search for lyrics");
+            return status;
+        }
+
         try {
+            Double duration = mediaFile == null ? null : mediaFile.getDuration();
+            String lyrics = neteaseLyricsProvider.fetchLyrics(artist, song, duration);
+            String source = "music.163.com";
+            boolean synced = true;
+            if (lyrics == null) {
+                source = "chartlyrics.com";
+                synced = false;
+                String encodedArtist = StringUtil.urlEncode(artist == null ? "" : artist);
+                String encodedSong = StringUtil.urlEncode(song);
+                String url = "http://api.chartlyrics.com/apiv1.asmx/SearchLyricDirect?artist=" + encodedArtist + "&song=" + encodedSong;
+                String xml = executeGetRequest(url);
+                lyrics = parseSearchResult(xml);
+            }
 
-            artist = StringUtil.urlEncode(artist);
-            song = StringUtil.urlEncode(song);
-
-            String url = "http://api.chartlyrics.com/apiv1.asmx/SearchLyricDirect?artist=" + artist + "&song=" + song;
-            String xml = executeGetRequest(url);
-            String lyrics = parseSearchResult(xml);
-
-            if (lyrics != null && req.getId() != null) {
-                MediaFile mediaFile = mediaFileService.getMediaFile(req.getId());
-                if (mediaFile != null && securityService.isFolderAccessAllowed(mediaFile, user.getName())) {
-                    boolean persisted = lyricsService.saveLyricsForMediaFile(mediaFile, lyrics, "chartlyrics.com");
-                    LOG.info("Persisted lyrics for song '{}' by '{}': {}", song, artist, persisted);
-                    status.setPersisted(persisted);
-                }
+            if (lyrics != null && mediaFile != null) {
+                boolean persisted = lyricsService.saveLyricsForMediaFile(mediaFile, lyrics, source, synced);
+                LOG.info("Persisted lyrics for song '{}' by '{}' from {}: {}", song, artist, source, persisted);
+                status.setPersisted(persisted);
             }
         } catch (HttpResponseException x) {
             LOG.warn("Failed to get lyrics for song '{}'. Request failed: {}", song, x.toString());

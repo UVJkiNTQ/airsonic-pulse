@@ -100,4 +100,23 @@ class LrcParserTest {
         LrcFile lrcFile = parser.parse((Path) null);
         assertNull(lrcFile);
     }
+
+    @Test
+    void parseTextShouldParseTimedLinesAndSkipMetadata() {
+        LrcFile lrcFile = parser.parseText("[by:someone]\n[00:28.950]First line\n[00:32.380]Second line\n");
+
+        assertNotNull(lrcFile);
+        List<LyricsLine> lines = lrcFile.getLyricsLines();
+        assertEquals(2, lines.size());
+        assertEquals("First line", lines.get(0).getText());
+        assertEquals(28_950, lines.get(0).getTime());
+        assertEquals("Second line", lines.get(1).getText());
+        assertEquals(32_380, lines.get(1).getTime());
+    }
+
+    @Test
+    void parseTextShouldReturnNullForBlankContent() {
+        assertNull(parser.parseText(null));
+        assertNull(parser.parseText("  "));
+    }
 }

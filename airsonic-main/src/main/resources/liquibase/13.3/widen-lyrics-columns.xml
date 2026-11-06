@@ -1,0 +1,25 @@
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.1.xsd">
+
+    <!--
+      MariaDB/MySQL map ${varchar_type} to varchar(${mysqlVarcharLimit}) (384 on older installs,
+      1024 by default today). A full LRC payload fetched from an external provider is routinely
+      larger than either limit, so store the flat text as LONGTEXT. Individual structured lines are
+      widened too, in case a single line is unusually long. PostgreSQL/HSQLDB use an unbounded
+      varchar already, so they need no change.
+
+      Raw ALTER statements are used instead of modifyDataType because Liquibase's MySQL generator
+      emits a bare MODIFY that would drop the NOT NULL constraints.
+    -->
+    <changeSet id="widen-lyrics-and-structured-line-text" author="airsonic-pulse" dbms="mariadb,mysql">
+        <sql>ALTER TABLE lyrics MODIFY lyrics LONGTEXT NOT NULL</sql>
+        <sql>ALTER TABLE structured_lyrics_line MODIFY text TEXT NOT NULL</sql>
+        <rollback>
+            <sql>ALTER TABLE lyrics MODIFY lyrics varchar(${mysqlVarcharLimit}) NOT NULL</sql>
+            <sql>ALTER TABLE structured_lyrics_line MODIFY text varchar(${mysqlVarcharLimit}) NOT NULL</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

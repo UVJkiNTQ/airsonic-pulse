@@ -246,6 +246,21 @@ public class LyricsService {
 
     @Transactional
     public boolean saveLyricsForMediaFile(@Nonnull MediaFile mediaFile, @Nonnull String lyricsText, @Nonnull String source) {
+        return saveLyricsForMediaFile(mediaFile, lyricsText, source, false);
+    }
+
+    /**
+     * Saves lyrics for a media file, optionally parsing LRC timestamps into structured lines.
+     *
+     * <p>
+     * When {@code synced} is true the text is run through the LRC parser and, if it yields timed
+     * lines, the row is marked synced and the lines are stored alongside the flat text blob. Any
+     * existing structured lines are replaced, so editing or re-fetching lyrics never leaves stale
+     * timestamps behind.
+     */
+    @Transactional
+    public boolean saveLyricsForMediaFile(@Nonnull MediaFile mediaFile, @Nonnull String lyricsText, @Nonnull String source,
+            boolean synced) {
 
         if (mediaFile.isDirectory()) {
             LOG.warn("MediaFile is a directory, cannot save lyrics");
@@ -253,11 +268,29 @@ public class LyricsService {
         }
 
         Lyrics existing = lyricsRepository.findByMediaFileId(mediaFile.getId()).orElse(null);
+        String flatText = lyricsText;
+        boolean storedSynced = false;
+        List<LyricsLine> parsedLines = List.of();
+        if (synced) {
+            LrcFile lrcFile = lrcParser.parseText(lyricsText);
+            if (lrcFile != null && !lrcFile.getLyricsLines().isEmpty()) {
+                // Store timestamp-free text in the flat blob (read by the web popup and the legacy
+                // /getLyrics endpoint) while keeping the timed lines structured — this mirrors the
+                // sidecar path in getLyricsFromMediaFile.
+                StringBuilder text = new StringBuilder();
+                for (LyricsLine line : lrcFile.getLyricsLines()) {
+                    text.append(line.getText()).append('\n');
+                }
+                flatText = text.toString();
+                parsedLines = lrcFile.getLyricsLines();
+                storedSynced = true;
+            }
+        }
         // A manual ("user") or externally fetched ("chartlyrics.com") save is not derived from
         // the file: it stores a null signal, which exempts the row from freshness comparison
         // (#281). Going through replaceRow also clears any structured lines left behind by a
         // previously synced row and refreshes updated.
-        replaceRow(existing, mediaFile.getId(), lyricsText, source, false, List.of(), null);
+        replaceRow(existing, mediaFile.getId(), flatText, source, storedSynced, parsedLines, null);
         return true;
 
     }

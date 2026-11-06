@@ -30,6 +30,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
@@ -71,28 +72,13 @@ public class LrcParser {
             LOG.warn("LRC file does not exist: {}", lrcFilePath);
             return null;
         }
-        List<LyricsLine> lines = new ArrayList<>();
         try (BufferedReader reader = new BufferedReader(new FileReader(lrcFilePath.toFile()))) {
+            List<String> rawLines = new ArrayList<>();
             String line;
             while ((line = reader.readLine()) != null) {
-                // Ignore extended format meta information lines
-                if (line.matches("\\[\\w+?:.*\\]")) {
-                    continue;
-                }
-                // Remove A2 Extension part (e.g., <...> after time tag)
-                line = line.replaceAll("(^\\[\\d{2}:\\d{2}(\\.\\d{2,3})?\\])\\s*<.*?>", "$1");
-                // Also remove any <...> that may appear after the time tag
-                line = line.replaceAll("\\s<.*?>", "");
-
-                String[] parts = line.split("]");
-                for (int i = 0; i < parts.length - 1; i++) {
-                    String timeTag = parts[i].replace("[", "").trim();
-                    String text = parts[parts.length - 1].trim();
-                    long time = parseTimeTag(timeTag);
-                    lines.add(new LyricsLine(time, text));
-                }
+                rawLines.add(line);
             }
-            return new LrcFile(lines, Files.getLastModifiedTime(lrcFilePath).toInstant().truncatedTo(ChronoUnit.MICROS));
+            return parseLines(rawLines, Files.getLastModifiedTime(lrcFilePath).toInstant().truncatedTo(ChronoUnit.MICROS));
         } catch (IOException e) {
             LOG.warn("Error reading LRC file: {}", lrcFilePath);
             return null;
@@ -100,6 +86,51 @@ public class LrcParser {
             LOG.warn("Unexpected error while parsing LRC file: {}", lrcFilePath);
             return null;
         }
+    }
+
+    /**
+     * Parses LRC content that did not come from a file, such as lyrics fetched from an external
+     * provider. The input is treated exactly like a sidecar file: the same tag handling and
+     * punctuation rules apply.
+     *
+     * @param content the LRC text
+     * @return the parsed file, or null when the content is blank or cannot be parsed
+     */
+    @Nullable
+    public LrcFile parseText(@Nullable String content) {
+        if (StringUtils.isBlank(content)) {
+            LOG.warn("LRC content is blank");
+            return null;
+        }
+        try {
+            return parseLines(content.lines().toList(), Instant.now().truncatedTo(ChronoUnit.MICROS));
+        } catch (Exception e) {
+            LOG.warn("Unexpected error while parsing LRC content");
+            return null;
+        }
+    }
+
+    private LrcFile parseLines(List<String> rawLines, Instant lastModified) {
+        List<LyricsLine> lines = new ArrayList<>();
+        for (String line : rawLines) {
+            // Ignore extended format meta information lines
+            if (line.matches("\\[\\w+?:.*\\]")) {
+                continue;
+            }
+            // Remove A2 Extension part (e.g., <...> after time tag)
+            line = line.replaceAll("(^\\[\\d{2}:\\d{2}(\\.\\d{2,3})?\\])\\s*<.*?>", "$1");
+            // Also remove any <...> that may appear after the time tag
+            line = line.replaceAll("\\s<.*?>", "");
+
+            String[] parts = line.split("]");
+            for (int i = 0; i < parts.length - 1; i++) {
+                String timeTag = parts[i].replace("[", "").trim();
+                String text = parts[parts.length - 1].trim();
+                long time = parseTimeTag(timeTag);
+                lines.add(new LyricsLine(time, text));
+            }
+        }
+        return new LrcFile(lines, lastModified);
     }
 
     private long parseTimeTag(String tag) {

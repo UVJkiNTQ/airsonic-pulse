@@ -263,9 +263,9 @@ public class MediaScannerServiceTestCase {
         Path musicFile = artistDir.resolve("genre-rescan.mp3");
         Files.createDirectories(artistDir);
         Files.copy(Paths.get(Resources.getResource("MEDIAS/piano.mp3").toURI()), musicFile);
-        createdGenreNames.add("StaleGenre319");
-        createdGenreNames.add("FreshGenre319");
-        writeGenreTag(musicFile, "StaleGenre319");
+        createdGenreNames.add("stalegenre319");
+        createdGenreNames.add("freshgenre319");
+        writeGenreTag(musicFile, "stalegenre319");
 
         MusicFolder musicFolder = new MusicFolder(temporaryFolder, "MusicGenreRescan", Type.MEDIA, true,
                 Instant.now().truncatedTo(ChronoUnit.MICROS));
@@ -275,23 +275,23 @@ public class MediaScannerServiceTestCase {
         TestCaseUtils.execScan(mediaScannerService);
 
         Map<String, Genre> genresByName = genreTableByName();
-        assertTrue(genresByName.containsKey("StaleGenre319"), "first scan must create the genre row");
-        assertEquals(1, genresByName.get("StaleGenre319").getSongCount());
+        assertTrue(genresByName.containsKey("stalegenre319"), "first scan must create the genre row");
+        assertEquals(1, genresByName.get("stalegenre319").getSongCount());
 
         // Retag the only carrier of the genre and rescan: the old row must disappear (#319).
-        writeGenreTag(musicFile, "FreshGenre319");
+        writeGenreTag(musicFile, "freshgenre319");
         TestCaseUtils.execScan(mediaScannerService);
 
         genresByName = genreTableByName();
-        assertFalse(genresByName.containsKey("StaleGenre319"), "rescan must delete the stale genre row");
-        assertTrue(genresByName.containsKey("FreshGenre319"), "rescan must create the new genre row");
-        assertEquals(1, genresByName.get("FreshGenre319").getSongCount());
+        assertFalse(genresByName.containsKey("stalegenre319"), "rescan must delete the stale genre row");
+        assertTrue(genresByName.containsKey("freshgenre319"), "rescan must create the new genre row");
+        assertEquals(1, genresByName.get("freshgenre319").getSongCount());
 
         // A rescan with no tag change leaves the genre set unchanged.
         TestCaseUtils.execScan(mediaScannerService);
         Map<String, Genre> genresAfterNoopRescan = genreTableByName();
         assertEquals(genresByName.keySet(), genresAfterNoopRescan.keySet());
-        assertEquals(1, genresAfterNoopRescan.get("FreshGenre319").getSongCount());
+        assertEquals(1, genresAfterNoopRescan.get("freshgenre319").getSongCount());
     }
 
     private Map<String, Genre> genreTableByName() {

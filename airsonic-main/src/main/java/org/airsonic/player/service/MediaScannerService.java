@@ -462,12 +462,15 @@ public class MediaScannerService implements SmartLifecycle {
                         LOG.info("Updating genres");
                         long count = mediaFileService.updateGenres(genres.getGenres()).size();
                         boolean genresSuccessful = count == genres.getGenres().size();
-                        // The accumulator above was rebuilt from scratch over every music folder,
+                        // On a full scan the accumulator was rebuilt over every music folder
                         // and this block is only reached when that walk completed uncancelled
                         // (the isMediaScanning() check after the join), so any genre row not in
-                        // the seen set is stale (#319). A partial walk (per-folder scan, #357)
-                        // must skip or scope this delete, or it would remove valid genres.
-                        int staleCount = mediaFileService.deleteStaleGenres(genres.getGenres());
+                        // the seen set is stale (#319). A per-folder scan only saw a subset, so
+                        // deleting unseen genres would remove valid rows from unscanned folders.
+                        int staleCount = 0;
+                        if (!isPartialScan) {
+                            staleCount = mediaFileService.deleteStaleGenres(genres.getGenres());
+                        }
                         if (staleCount > 0) {
                             LOG.info("Removed {} stale genre(s) no longer present on any scanned file.", staleCount);
                         }

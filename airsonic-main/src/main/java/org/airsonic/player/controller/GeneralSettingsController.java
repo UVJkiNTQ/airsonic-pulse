@@ -126,11 +126,11 @@ public class GeneralSettingsController {
             bindingResult.rejectValue("replayGainFallback", "generalsettings.replaygainfallback.invalid");
         }
         Integer scanTimeout = command.getScanTimeoutSeconds();
-        if (scanTimeout != null && (scanTimeout < 60 || scanTimeout > 86400)) {
+        if (scanTimeout != null && scanTimeout < 60) {
             bindingResult.rejectValue("scanTimeoutSeconds", "generalsettings.scantimeout.invalid");
         }
         Integer fullScanTimeout = command.getFullScanTimeoutSeconds();
-        if (fullScanTimeout != null && (fullScanTimeout < 60 || fullScanTimeout > 86400)) {
+        if (fullScanTimeout != null && fullScanTimeout < 60) {
             bindingResult.rejectValue("fullScanTimeoutSeconds", "generalsettings.fullscantimeout.invalid");
         } else if (scanTimeout != null && fullScanTimeout != null && fullScanTimeout < scanTimeout) {
             bindingResult.rejectValue("fullScanTimeoutSeconds", "generalsettings.fullscantimeout.lessthanscan");

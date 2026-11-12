@@ -274,7 +274,7 @@ class GeneralSettingsControllerTest {
         GeneralSettingsCommand command = new GeneralSettingsCommand();
         command.setThemeIndex("0");
         command.setLocaleIndex("0");
-        command.setFullScanTimeoutSeconds(90000);
+        command.setFullScanTimeoutSeconds(30);
         BindingResult bindingResult = new BeanPropertyBindingResult(command, "command");
 
         controller.doSubmitAction(command, bindingResult, new RedirectAttributesModelMap());
@@ -282,6 +282,26 @@ class GeneralSettingsControllerTest {
         assertTrue(bindingResult.hasFieldErrors("fullScanTimeoutSeconds"));
         assertEquals("generalsettings.fullscantimeout.invalid", bindingResult.getFieldError("fullScanTimeoutSeconds").getCode());
         verify(settingsService, never()).setFullScanTimeoutSeconds(any());
+    }
+
+    @Test
+    void doSubmitActionAcceptsLargeScanTimeoutsWithoutUpperBound() {
+        stubThemesAndLocales();
+
+        GeneralSettingsCommand command = new GeneralSettingsCommand();
+        command.setThemeIndex("0");
+        command.setLocaleIndex("0");
+        command.setScanTimeoutSeconds(90000);
+        command.setFullScanTimeoutSeconds(180000);
+        BindingResult bindingResult = new BeanPropertyBindingResult(command, "command");
+
+        String view = controller.doSubmitAction(command, bindingResult, new RedirectAttributesModelMap());
+
+        assertFalse(bindingResult.hasFieldErrors("scanTimeoutSeconds"));
+        assertFalse(bindingResult.hasFieldErrors("fullScanTimeoutSeconds"));
+        assertEquals("redirect:generalSettings.view", view);
+        verify(settingsService).setScanTimeoutSeconds(90000);
+        verify(settingsService).setFullScanTimeoutSeconds(180000);
     }
 
     @Test

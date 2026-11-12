@@ -49,7 +49,7 @@ import org.airsonic.player.service.metadata.MetaDataParser;
 import org.airsonic.player.service.metadata.MetaDataParserFactory;
 import org.airsonic.player.util.FileUtil;
 import org.apache.commons.io.FilenameUtils;
-import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
 import org.digitalmediaserver.cuelib.CueSheet;
 import org.digitalmediaserver.cuelib.FileData;
@@ -86,6 +86,7 @@ import java.time.format.FormatStyle;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -515,6 +516,7 @@ public class MediaFileService {
      * @return The most recently starred songs for this user.
      */
     @Transactional
+    @UnmodifiableResult
     public List<MediaFile> getStarredSongs(int offset, int count, String username, List<MusicFolder> musicFolders) {
         if (CollectionUtils.isEmpty(musicFolders)) {
             return Collections.emptyList();
@@ -634,6 +636,32 @@ public class MediaFileService {
     @Transactional
     public List<Genre> updateGenres(List <Genre> genres) {
         return genreRepository.saveAll(genres);
+    }
+
+    /**
+     * Deletes every genre row whose name is not in the given scan-seen set (#319). The genre
+     * table is a count cache rebuilt from scratch by each scan: saveAll only upserts the names
+     * the scan encountered, so a genre removed from the last file that carried it would
+     * otherwise survive forever with frozen counts.
+     *
+     * <p>Only call this after a scan that walked EVERY music folder and completed normally
+     * (today that is every scan that reaches the persistence phase). A partial walk — e.g. the
+     * per-folder scan proposed in #357 — must skip or scope this delete, or it would remove
+     * genres that are still present on files in the unscanned folders.
+     *
+     * @param seenGenres the genres accumulated by the completed scan
+     * @return the number of stale rows deleted
+     */
+    @Transactional
+    public int deleteStaleGenres(Collection<Genre> seenGenres) {
+        Set<String> seenNames = seenGenres.stream().map(Genre::getName).collect(Collectors.toSet());
+        List<Genre> staleGenres = genreRepository.findAll().stream()
+                .filter(genre -> !seenNames.contains(genre.getName()))
+                .toList();
+        if (!staleGenres.isEmpty()) {
+            genreRepository.deleteAllInBatch(staleGenres);
+        }
+        return staleGenres.size();
     }
 
     /**
@@ -889,6 +917,9 @@ public class MediaFileService {
 
         boolean isEnableCueIndexing = settingsService.getEnableCueIndexing();
 
+        // set when an already-stored child is re-read from disk because it changed
+        AtomicBoolean existingChildUpdated = new AtomicBoolean(false);
+
         // cue sheets
         Map<String, CueSheet> cueSheets = new ConcurrentHashMap<>();
         // media files that are not indexed
@@ -910,6 +941,9 @@ public class MediaFileService {
                                 updateMediaFile(mediaFile);
                             }
                         } else if (!mediaFile.hasIndex()) {
+                            if (needsUpdate(mediaFile, false)) {
+                                existingChildUpdated.set(true);
+                            }
                             mediaFile = checkLastModified(mediaFile, false); // has to be false, only time it's called
                         }
                         // Add children that are not already stored.
@@ -1013,6 +1047,14 @@ public class MediaFileService {
 
         // Delete children that no longer exist on disk.
         storedChildrenMap.values().forEach(f -> delete(f));
+
+        // An album directory's artist/album/year/genre are a snapshot guessed from its first
+        // child (updateMediaFileByFile). Retagging a file in place does not touch the
+        // directory's mtime, so without this refresh the snapshot — including a genre that no
+        // longer exists on any file — would survive every rescan (#319).
+        if (existingChildUpdated.get()) {
+            updateMediaFileByFile(parent);
+        }
 
         // Update timestamp in parent.
         parent.setChildrenLastUpdated(parent.getChanged());

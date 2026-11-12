@@ -299,6 +299,8 @@ public class PlayQueueService {
             }
         }
 
+        // Copy first: the single-index branch leaves a fixed-size Arrays.asList that rejects removeIf.
+        files = new ArrayList<>(files);
         // Remove non-present files
         files.removeIf(file -> !file.isPresent());
         doPlay(player, files, null, sessionId);
@@ -418,6 +420,8 @@ public class PlayQueueService {
     }
 
     private void doPlay(Player player, List<MediaFile> files, InternetRadio radio, String sessionId) {
+        // This method mutates the list (removeVideoFiles) and callers may pass immutable ones.
+        files = new ArrayList<>(files);
         if (player.isWeb()) {
             mediaFileService.removeVideoFiles(files);
         }

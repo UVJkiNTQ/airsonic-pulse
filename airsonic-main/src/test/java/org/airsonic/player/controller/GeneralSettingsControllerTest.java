@@ -24,6 +24,7 @@ import org.airsonic.player.service.PlaylistFileService;
 import org.airsonic.player.service.SettingsService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -42,7 +43,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -317,6 +320,101 @@ class GeneralSettingsControllerTest {
         verify(settingsService, never()).setScanTimeoutSeconds(any());
         verify(settingsService, never()).setFullScanTimeoutSeconds(any());
         verify(settingsService, never()).save();
+    }
+
+    private GeneralSettingsCommand submittableCommand() {
+        GeneralSettingsCommand command = new GeneralSettingsCommand();
+        command.setThemeIndex("0");
+        command.setLocaleIndex("0");
+        return command;
+    }
+
+    @Test
+    void doSubmitActionSkipsPlaylistImportWhenFolderUnchanged() {
+        stubThemesAndLocales();
+        when(settingsService.getPlaylistFolder()).thenReturn("/var/playlists");
+        GeneralSettingsCommand command = submittableCommand();
+        command.setPlaylistFolder("/var/playlists");
+
+        controller.doSubmitAction(command, new BeanPropertyBindingResult(command, "command"), new RedirectAttributesModelMap());
+
+        verify(settingsService).setPlaylistFolder("/var/playlists");
+        verify(playlistFileService, never()).removePlaylistFolderWatcher();
+        verify(playlistFileService, never()).addPlaylistFolderWatcher();
+        verify(playlistFileService, never()).importPlaylists();
+    }
+
+    @Test
+    void doSubmitActionTriggersPlaylistImportOnceWhenFolderChanges() {
+        stubThemesAndLocales();
+        when(settingsService.getPlaylistFolder()).thenReturn("/var/playlists");
+        GeneralSettingsCommand command = submittableCommand();
+        command.setPlaylistFolder("/srv/playlists");
+
+        controller.doSubmitAction(command, new BeanPropertyBindingResult(command, "command"), new RedirectAttributesModelMap());
+
+        verify(settingsService).setPlaylistFolder("/srv/playlists");
+        InOrder inOrder = inOrder(playlistFileService);
+        inOrder.verify(playlistFileService, times(1)).removePlaylistFolderWatcher();
+        inOrder.verify(playlistFileService, times(1)).addPlaylistFolderWatcher();
+        inOrder.verify(playlistFileService, times(1)).importPlaylists();
+    }
+
+    @Test
+    void doSubmitActionSkipsPlaylistImportWhenOnlyUnrelatedSettingChanges() {
+        stubThemesAndLocales();
+        when(settingsService.getPlaylistFolder()).thenReturn("/var/playlists");
+        GeneralSettingsCommand command = submittableCommand();
+        command.setPlaylistFolder("/var/playlists");
+        command.setReplayGainFallback(3.5);
+
+        controller.doSubmitAction(command, new BeanPropertyBindingResult(command, "command"), new RedirectAttributesModelMap());
+
+        verify(settingsService).setReplayGainFallback(3.5);
+        verify(playlistFileService, never()).addPlaylistFolderWatcher();
+        verify(playlistFileService, never()).importPlaylists();
+    }
+
+    @Test
+    void doSubmitActionSkipsPlaylistImportWhenFolderCleared() {
+        stubThemesAndLocales();
+        when(settingsService.getPlaylistFolder()).thenReturn("/var/playlists");
+        GeneralSettingsCommand command = submittableCommand();
+        command.setPlaylistFolder("");
+
+        controller.doSubmitAction(command, new BeanPropertyBindingResult(command, "command"), new RedirectAttributesModelMap());
+
+        verify(settingsService).setPlaylistFolder("");
+        verify(playlistFileService, times(1)).removePlaylistFolderWatcher();
+        verify(playlistFileService, never()).addPlaylistFolderWatcher();
+        verify(playlistFileService, never()).importPlaylists();
+    }
+
+    @Test
+    void doSubmitActionSkipsPlaylistImportOnCosmeticPathChange() {
+        stubThemesAndLocales();
+        when(settingsService.getPlaylistFolder()).thenReturn("/var/playlists");
+        GeneralSettingsCommand command = submittableCommand();
+        command.setPlaylistFolder("/var/playlists/");
+
+        controller.doSubmitAction(command, new BeanPropertyBindingResult(command, "command"), new RedirectAttributesModelMap());
+
+        verify(settingsService).setPlaylistFolder("/var/playlists/");
+        verify(playlistFileService, never()).addPlaylistFolderWatcher();
+        verify(playlistFileService, never()).importPlaylists();
+    }
+
+    @Test
+    void doSubmitActionTriggersPlaylistImportOnFirstConfiguration() {
+        stubThemesAndLocales();
+        when(settingsService.getPlaylistFolder()).thenReturn(null);
+        GeneralSettingsCommand command = submittableCommand();
+        command.setPlaylistFolder("/var/playlists");
+
+        controller.doSubmitAction(command, new BeanPropertyBindingResult(command, "command"), new RedirectAttributesModelMap());
+
+        verify(playlistFileService, times(1)).addPlaylistFolderWatcher();
+        verify(playlistFileService, times(1)).importPlaylists();
     }
 
     @Test

@@ -427,6 +427,18 @@ public class MediaFileServiceTest {
         assertEquals("01-Track.flac", MediaFileService.normalizeCueFilePath("01-Track.flac"));
     }
 
+    @Test
+    public void resolveCueBasePathAcceptsInFolderPathsAndRejectsTraversal() {
+        Path root = Path.of("/music");
+        assertEquals(Path.of("album/disc 1/01.flac"),
+                MediaFileService.resolveCueBasePath("album", "disc 1\\01.flac", root));
+        assertEquals(Path.of("shared/01.flac"),
+                MediaFileService.resolveCueBasePath("album", "../shared/01.flac", root));
+        assertNull(MediaFileService.resolveCueBasePath("album", "../../etc/passwd", root));
+        assertNull(MediaFileService.resolveCueBasePath("album", "/etc/passwd", root));
+        assertNull(MediaFileService.resolveCueBasePath("album", "C:\\Windows\\system.ini", root));
+    }
+
     private MediaFile cueBase() {
         MediaFile base = new MediaFile();
         base.setIndexPath("cue/airsonic-test.cue");

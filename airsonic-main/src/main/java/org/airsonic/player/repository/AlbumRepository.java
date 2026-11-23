@@ -37,7 +37,8 @@ public interface AlbumRepository extends JpaRepository<Album, Integer> {
 
     public List<Album> findByFolderInAndPresentTrue(Iterable<MusicFolder> musicFolders, Pageable pageable);
 
-    public List<Album> findByGenreAndFolderInAndPresentTrue(String genre, Iterable<MusicFolder> musicFolders, Pageable pageable);
+    @Query("SELECT a FROM Album a WHERE LOWER(a.genre) = LOWER(:genre) AND a.folder IN :musicFolders AND a.present = true")
+    public List<Album> findByGenreAndFolderInAndPresentTrue(@Param("genre") String genre, @Param("musicFolders") Iterable<MusicFolder> musicFolders, Pageable pageable);
 
     public List<Album> findByFolderInAndPlayCountGreaterThanAndPresentTrue(Iterable<MusicFolder> musicFolders, AtomicInteger playCount, Pageable pageable);
 

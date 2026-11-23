@@ -531,4 +531,42 @@ public class CueParserTest {
             assertEquals("Anime", sheet.getGenre());
         }
     }
+
+    @Test
+    void testIndentedMultilineQuotedTitle() throws Exception {
+        String cue = """
+            PERFORMER "Test Artist"
+            TITLE "Album"
+            FILE "test.wav" WAVE
+              TRACK 01 AUDIO
+                TITLE "Line One
+            Line Two"
+                INDEX 01 00:00:00
+            """;
+
+        CueSheet sheet = parse(cue);
+        assertNotNull(sheet);
+        assertEquals("Line One\nLine Two", sheet.getAllTrackData().get(0).getTitle());
+    }
+
+    @Test
+    void testLoneQuoteInCatalogAndRemDoesNotThrow() throws Exception {
+        String cue = """
+            CATALOG "
+            REM COMMENT "
+            REM\tDATE\t2021
+            PERFORMER "Test Artist"
+            TITLE "Album"
+            FILE test.wav WAVE
+              TRACK 01 AUDIO
+                TITLE "Track One"
+                INDEX 01 00:00:00
+            """;
+
+        CueSheet sheet = parse(cue);
+        assertNotNull(sheet);
+        assertEquals(2021, sheet.getYear());
+        assertEquals("test.wav", sheet.getFileData().get(0).getFile());
+        assertEquals(1, sheet.getAllTrackData().size());
+    }
 }

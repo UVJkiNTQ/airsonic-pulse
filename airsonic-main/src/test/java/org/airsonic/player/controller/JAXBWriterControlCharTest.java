@@ -20,6 +20,7 @@ import org.subsonic.restapi.ResponseStatus;
 import java.util.Map.Entry;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -64,6 +65,12 @@ public class JAXBWriterControlCharTest {
         String out = JAXBWriter.sanitizeInvalidXmlChars(input);
         assertTrue(out.contains("🎵"), "surrogate pair (emoji) must survive");
         assertFalse(out.indexOf('\u0000') >= 0, "control char must be replaced");
+    }
+
+    @Test
+    public void sanitizeInvalidXmlChars_returnsSameReferenceWhenAlreadyValid() {
+        String input = "<subsonic-response status=\"ok\">🎵 Bon Jovi</subsonic-response>";
+        assertSame(input, JAXBWriter.sanitizeInvalidXmlChars(input));
     }
 
     private static Response buildResponseWithName(String name) {

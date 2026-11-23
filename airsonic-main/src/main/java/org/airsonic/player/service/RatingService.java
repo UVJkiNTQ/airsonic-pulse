@@ -20,6 +20,7 @@
  */
 package org.airsonic.player.service;
 
+import com.google.common.collect.Lists;
 import org.airsonic.player.domain.MediaFile;
 import org.airsonic.player.domain.MusicFolder;
 import org.airsonic.player.domain.entity.UserRating;
@@ -32,6 +33,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
@@ -145,9 +147,11 @@ public class RatingService {
         return userRatingRepository.findOptByUsernameAndMediaFileId(username, mediaFile.getId()).map(UserRating::getRating).orElse(null);
     }
 
+    private static final int IN_CLAUSE_BATCH_SIZE = 1000;
+
     /**
-     * Batches {@link #getRatingForUser(String, MediaFile)} for a whole page of media files into a
-     * single {@code IN} query keyed by media file id. Files without a user rating are absent.
+     * Batches {@link #getRatingForUser(String, MediaFile)} for a whole page of media files into
+     * chunked {@code IN} queries keyed by media file id. Files without a user rating are absent.
      */
     @Transactional(readOnly = true)
     public Map<Integer, Integer> getRatingsForUser(String username, Collection<MediaFile> mediaFiles) {
@@ -158,14 +162,18 @@ public class RatingService {
         if (ids.isEmpty()) {
             return Map.of();
         }
-        return userRatingRepository.findByUsernameAndMediaFileIdIn(username, ids)
-                .stream()
-                .collect(Collectors.toMap(UserRating::getMediaFileId, UserRating::getRating, (a, b) -> a));
+        Map<Integer, Integer> result = new HashMap<>();
+        for (List<Integer> batch : Lists.partition(new ArrayList<>(ids), IN_CLAUSE_BATCH_SIZE)) {
+            for (UserRating rating : userRatingRepository.findByUsernameAndMediaFileIdIn(username, batch)) {
+                result.putIfAbsent(rating.getMediaFileId(), rating.getRating());
+            }
+        }
+        return result;
     }
 
     /**
-     * Batches {@link #getAverageRating(MediaFile)} for a whole page of media files into a single
-     * grouped {@code IN} query keyed by media file id. Files without ratings are absent.
+     * Batches {@link #getAverageRating(MediaFile)} for a whole page of media files into chunked
+     * grouped {@code IN} queries keyed by media file id. Files without ratings are absent.
      */
     @Transactional(readOnly = true)
     public Map<Integer, Double> getAverageRatings(Collection<MediaFile> mediaFiles) {
@@ -177,8 +185,10 @@ public class RatingService {
             return Map.of();
         }
         Map<Integer, Double> result = new HashMap<>();
-        for (Object[] row : userRatingRepository.getAverageRatingByMediaFileIdIn(ids)) {
-            result.put(((Number) row[0]).intValue(), ((Number) row[1]).doubleValue());
+        for (List<Integer> batch : Lists.partition(new ArrayList<>(ids), IN_CLAUSE_BATCH_SIZE)) {
+            for (Object[] row : userRatingRepository.getAverageRatingByMediaFileIdIn(batch)) {
+                result.put(((Number) row[0]).intValue(), ((Number) row[1]).doubleValue());
+            }
         }
         return result;
     }

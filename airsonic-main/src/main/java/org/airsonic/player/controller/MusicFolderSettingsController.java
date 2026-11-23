@@ -224,9 +224,9 @@ public class MusicFolderSettingsController {
 
         mediaScannerService.schedule();
 
-        // Trigger scan for selected folders
+        // Trigger scan for selected folders (excluding any just marked for deletion)
         List<Integer> scanFolderIds = command.getMusicFolders().stream()
-                .filter(MusicFolderInfo::getScan)
+                .filter(info -> info.getScan() && !info.getDelete())
                 .map(MusicFolderInfo::getId)
                 .toList();
         if (!scanFolderIds.isEmpty()) {

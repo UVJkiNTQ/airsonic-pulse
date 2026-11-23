@@ -66,7 +66,14 @@ class NeteaseLyricsProviderTest {
 
         assertThat(matched).isGreaterThan(titleAndDuration);
         assertThat(titleAndDuration).isGreaterThanOrEqualTo(50);
-        assertThat(titleOnly).isEqualTo(25);
+        assertThat(titleOnly).isEqualTo(15);
         assertThat(differentTitle).isZero();
+    }
+
+    @Test
+    void scoreRejectsWrongArtistWhenDurationMissing() {
+        int wrongArtistNoDuration = NeteaseLyricsProvider.score("周杰伦", "晴天", null, "Other Artist", "晴天", 270.0);
+
+        assertThat(wrongArtistNoDuration).isLessThan(50);
     }
 }

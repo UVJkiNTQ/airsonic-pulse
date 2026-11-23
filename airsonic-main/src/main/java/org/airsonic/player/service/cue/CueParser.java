@@ -141,6 +141,9 @@ public class CueParser {
 
                 parseLine(line);
             }
+            if (continuation != null) {
+                parseLine(continuation.toString());
+            }
         }
 
         if (cueSheet.getFileData().isEmpty()) {
@@ -198,13 +201,21 @@ public class CueParser {
     // ── line parsers ────────────────────────────────────────────────────────
 
     private void parseFile(String line) {
-        // Format: FILE "<path>" <type>
+        // Format: FILE "<path>" <type>  or  FILE <unquoted-path> <type>
         String filePath = extractQuotedString(line);
-        if (filePath == null) {
-            LOG.debug("Could not extract file path from line {}: {}", lineNumber, line);
-            return;
+        String fileType;
+        if (filePath != null) {
+            fileType = line.substring(line.lastIndexOf('"') + 1).trim();
+        } else {
+            String rest = line.substring("FILE".length()).trim();
+            if (rest.isEmpty()) {
+                LOG.debug("Could not extract file path from line {}: {}", lineNumber, line);
+                return;
+            }
+            String[] parts = rest.split("\\s+", 2);
+            filePath = parts[0];
+            fileType = parts.length > 1 ? parts[1].trim() : "";
         }
-        String fileType = line.substring(line.lastIndexOf('"') + 1).trim();
         if (fileType.isEmpty()) {
             fileType = "WAVE"; // default
         }
@@ -331,7 +342,7 @@ public class CueParser {
         // Lenient: accept any catalog number
         String value = line.substring("CATALOG".length()).trim();
         // Remove surrounding quotes if present
-        if (value.startsWith("\"") && value.endsWith("\"")) {
+        if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
             value = value.substring(1, value.length() - 1);
         }
         if (!value.isEmpty()) {
@@ -391,7 +402,13 @@ public class CueParser {
     private void parseRem(String line) {
         // Format: REM <keyword> <value>
         String remPart = line.substring("REM".length()).trim();
-        int spaceIdx = remPart.indexOf(' ');
+        int spaceIdx = -1;
+        for (int i = 0; i < remPart.length(); i++) {
+            if (Character.isWhitespace(remPart.charAt(i))) {
+                spaceIdx = i;
+                break;
+            }
+        }
         if (spaceIdx < 0) {
             // Single token REM (e.g., "REM DISCID")
             // Store as a generic comment
@@ -402,7 +419,7 @@ public class CueParser {
         String value = remPart.substring(spaceIdx + 1).trim();
 
         // Remove surrounding quotes if present
-        if (value.startsWith("\"") && value.endsWith("\"")) {
+        if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
             value = value.substring(1, value.length() - 1);
         }
 
@@ -459,11 +476,12 @@ public class CueParser {
      * Check if a line has an opening quote but no closing quote (multi-line string start).
      */
     private boolean hasUnclosedQuote(String line) {
-        int firstQuote = line.indexOf('"');
-        int lastQuote = line.lastIndexOf('"');
+        String trimmed = line.trim();
+        int firstQuote = trimmed.indexOf('"');
+        int lastQuote = trimmed.lastIndexOf('"');
         return firstQuote >= 0 && (firstQuote == lastQuote)
-            && (matches(line, PATTERN_TITLE) || matches(line, PATTERN_PERFORMER)
-                || matches(line, PATTERN_SONGWRITER) || matches(line, PATTERN_FILE));
+            && (matches(trimmed, PATTERN_TITLE) || matches(trimmed, PATTERN_PERFORMER)
+                || matches(trimmed, PATTERN_SONGWRITER) || matches(trimmed, PATTERN_FILE));
     }
 
     /**

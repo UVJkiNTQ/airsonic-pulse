@@ -1,0 +1,32 @@
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.1.xsd">
+
+    <!--
+      MariaDB/MySQL keep ${mysqlVarcharLimit} at 384 so composite utf8mb4 indexes (e.g.
+      album(artist, name)) stay within InnoDB's 3072-byte key limit (384 * 4 * 2 = 3072).
+      Widen non-indexed descriptive/packed columns on media_file directly so long titles,
+      comments, and multi-value metadata fit on both fresh and existing MariaDB/MySQL schemas.
+      PostgreSQL and HSQLDB already use unbounded varchar.
+    -->
+    <changeSet id="widen-unindexed-media-file-columns" author="airsonic-pulse" dbms="mariadb,mysql">
+        <sql>ALTER TABLE media_file MODIFY title VARCHAR(1024) NULL</sql>
+        <sql>ALTER TABLE media_file MODIFY disc_subtitle VARCHAR(1024) NULL</sql>
+        <sql>ALTER TABLE media_file MODIFY release_types VARCHAR(1024) NULL</sql>
+        <sql>ALTER TABLE media_file MODIFY record_labels VARCHAR(1024) NULL</sql>
+        <sql>ALTER TABLE media_file MODIFY genres VARCHAR(1024) NULL</sql>
+        <sql>ALTER TABLE media_file MODIFY contributors TEXT NULL</sql>
+        <sql>ALTER TABLE media_file MODIFY comment TEXT NULL</sql>
+        <rollback>
+            <sql>ALTER TABLE media_file MODIFY title varchar(${mysqlVarcharLimit}) NULL</sql>
+            <sql>ALTER TABLE media_file MODIFY disc_subtitle varchar(${mysqlVarcharLimit}) NULL</sql>
+            <sql>ALTER TABLE media_file MODIFY release_types varchar(${mysqlVarcharLimit}) NULL</sql>
+            <sql>ALTER TABLE media_file MODIFY record_labels varchar(${mysqlVarcharLimit}) NULL</sql>
+            <sql>ALTER TABLE media_file MODIFY genres varchar(${mysqlVarcharLimit}) NULL</sql>
+            <sql>ALTER TABLE media_file MODIFY contributors varchar(${mysqlVarcharLimit}) NULL</sql>
+            <sql>ALTER TABLE media_file MODIFY comment varchar(${mysqlVarcharLimit}) NULL</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

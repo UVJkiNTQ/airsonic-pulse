@@ -173,7 +173,7 @@ public class CoverArtController {
     }
 
     boolean isClientAbort(Throwable e) {
-        for (Throwable t = e; t != null; t = t.getCause()) {
+        for (Throwable t = e; t != null; t = (t.getCause() == t ? null : t.getCause())) {
             if (Util.isInstanceOfClassName(t, "org.apache.catalina.connector.ClientAbortException")
                     || Util.isInstanceOfClassName(t, "org.springframework.web.context.request.async.AsyncRequestNotUsableException")) {
                 return true;

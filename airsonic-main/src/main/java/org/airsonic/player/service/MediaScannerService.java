@@ -65,6 +65,7 @@ public class MediaScannerService implements SmartLifecycle {
     private final AtomicBoolean mediaScaninng = new AtomicBoolean(false);
     private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
     private volatile boolean running = false;
+    private volatile ForkJoinPool activePool;
 
     public MediaScannerService(
         SettingsService settingsService,
@@ -140,10 +141,20 @@ public class MediaScannerService implements SmartLifecycle {
         // Called by Spring on application shutdown BEFORE beans are destroyed and the
         // EntityManagerFactory is closed. An in-flight async scan would otherwise keep
         // persisting files and log a "scan file failed : EntityManagerFactory is closed"
-        // WARN for every remaining file. Flag the shutdown and cancel the scan loop.
+        // WARN for every remaining file. Flag the shutdown, cancel the scan loop, and
+        // wait briefly for active worker threads to drain.
         running = false;
         shuttingDown.set(true);
         mediaScaninng.set(false);
+        ForkJoinPool pool = activePool;
+        if (pool != null && !pool.isTerminated()) {
+            pool.shutdown();
+            try {
+                pool.awaitTermination(5, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     @Override
@@ -262,6 +273,7 @@ public class MediaScannerService implements SmartLifecycle {
         setMediaScanning(true);
 
         ForkJoinPool pool = new ForkJoinPool(scannerParallelism, mediaScannerThreadFactory, null, true);
+        activePool = pool;
 
         boolean isFullScan = settingsService.getFullScan();
         // A timeout set in General Settings (or written to airsonic.properties) wins; the
@@ -272,7 +284,10 @@ public class MediaScannerService implements SmartLifecycle {
                 : (isFullScan ? scanConfig.getFullTimeout() : scanConfig.getTimeout());
         MediaLibraryStatistics statistics = new MediaLibraryStatistics();
 
-        List<MusicFolder> foldersToScan = mediaFolderService.getAllMusicFolders(false, true).stream()
+        // Exclude disabled and non-existing (e.g. temporarily unmounted network) folders so an
+        // unmounted drive is never wiped by markNonPresent + indexManager.expunge().
+        List<MusicFolder> allActiveFolders = mediaFolderService.getAllMusicFolders();
+        List<MusicFolder> foldersToScan = allActiveFolders.stream()
                 .filter(f -> folderIds == null || folderIds.isEmpty() || folderIds.contains(f.getId()))
                 .toList();
 
@@ -280,21 +295,22 @@ public class MediaScannerService implements SmartLifecycle {
             LOG.info("No music folders to scan.");
             setScanning(false);
             setMediaScanning(false);
+            activePool = null;
             pool.shutdown();
             return;
         }
 
-        // Determine if this is a partial scan (only a subset of folders)
-        List<Integer> allFolderIds = mediaFolderService.getAllMusicFolders(false, true).stream()
+        // Determine once if this is a partial scan (only a strict subset of active folders).
+        List<Integer> allActiveIds = allActiveFolders.stream()
                 .map(MusicFolder::getId).toList();
         List<Integer> scannedIds = foldersToScan.stream().map(MusicFolder::getId).toList();
-        boolean isPartialScan = !allFolderIds.equals(scannedIds);
+        boolean isPartialScan = !allActiveIds.equals(scannedIds);
 
         LOG.info("Starting {} scan for {} of {} folder(s), timeout {} s ({}).",
-                isFullScan ? "full" : "quick", foldersToScan.size(), allFolderIds.size(), timeoutSeconds,
+                isFullScan ? "full" : "quick", foldersToScan.size(), allActiveFolders.size(), timeoutSeconds,
                 timeoutSetting != null ? "from General Settings" : "from AirsonicScanConfig default");
         CompletableFuture.runAsync(() -> {
-            doScanLibrary(pool, statistics, foldersToScan);
+            doScanLibrary(pool, statistics, foldersToScan, isPartialScan);
         }, pool)
                 .orTimeout(timeoutSeconds, TimeUnit.SECONDS)
                 .whenComplete((r,e) -> {
@@ -317,6 +333,7 @@ public class MediaScannerService implements SmartLifecycle {
                     indexManager.stopIndexing(statistics);
                     LOG.info("Indexing complete.");
                     setScanning(false);
+                    activePool = null;
                     pool.shutdown();
                 });
     }
@@ -353,20 +370,16 @@ public class MediaScannerService implements SmartLifecycle {
         }
     }
 
-    private void doScanLibrary(ForkJoinPool pool, MediaLibraryStatistics statistics, List<MusicFolder> foldersToScan) {
+    private void doScanLibrary(ForkJoinPool pool, MediaLibraryStatistics statistics, List<MusicFolder> foldersToScan,
+            boolean isPartialScan) {
         LOG.info("Starting to scan media library.");
         LOG.debug("New last scan date is {}", statistics.getScanDate());
 
-        // Determine if we are scanning all folders or a subset.
-        // When scanning only specific folders, we must restrict markNonPresent
-        // to those folders to avoid discarding records from other folders.
-        List<Integer> allFolderIds = mediaFolderService.getAllMusicFolders(false, true).stream()
-                .map(MusicFolder::getId).toList();
         List<Integer> scannedFolderIds = foldersToScan.stream()
                 .map(MusicFolder::getId).toList();
-        boolean isPartialScan = !allFolderIds.equals(scannedFolderIds);
-        LOG.debug("Scanning {} of {} total folder(s). Partial scan: {}",
-                scannedFolderIds.size(), allFolderIds.size(), isPartialScan);
+        Set<Integer> scannedFolderIdSet = new HashSet<>(scannedFolderIds);
+        LOG.debug("Scanning {} folder(s). Partial scan: {}",
+                scannedFolderIds.size(), isPartialScan);
 
         Map<String, AtomicInteger> albumCount = new ConcurrentHashMap<>();
         Map<String, Artist> artists = new ConcurrentHashMap<>();
@@ -394,7 +407,8 @@ public class MediaScannerService implements SmartLifecycle {
                                 return;
                             }
                             scanFile(pool, null, null, rootFile,
-                                    musicFolder, statistics, albumCount, artists, albums, albumsInDb, genres);
+                                    musicFolder, statistics, albumCount, artists, albums, albumsInDb, genres,
+                                    isPartialScan, scannedFolderIdSet);
                         });
                 // Update statistics
                 statistics.incrementArtists(albumCount.size());
@@ -460,15 +474,21 @@ public class MediaScannerService implements SmartLifecycle {
             CompletableFuture<Void> genrePersistence = CompletableFuture
                     .runAsync(() -> {
                         LOG.info("Updating genres");
-                        long count = mediaFileService.updateGenres(genres.getGenres()).size();
-                        boolean genresSuccessful = count == genres.getGenres().size();
-                        // On a full scan the accumulator was rebuilt over every music folder
-                        // and this block is only reached when that walk completed uncancelled
-                        // (the isMediaScanning() check after the join), so any genre row not in
-                        // the seen set is stale (#319). A per-folder scan only saw a subset, so
-                        // deleting unseen genres would remove valid rows from unscanned folders.
+                        boolean genresSuccessful;
                         int staleCount = 0;
-                        if (!isPartialScan) {
+                        if (isPartialScan) {
+                            // A partial scan only sees a subset of folders: inserting newly seen
+                            // genres without overwriting existing rows preserves accurate counts
+                            // for genres shared with unscanned folders.
+                            mediaFileService.mergeGenresForPartialScan(genres.getGenres());
+                            genresSuccessful = true;
+                        } else {
+                            long count = mediaFileService.updateGenres(genres.getGenres()).size();
+                            genresSuccessful = count == genres.getGenres().size();
+                            // On a full scan the accumulator was rebuilt over every music folder
+                            // and this block is only reached when that walk completed uncancelled
+                            // (the isMediaScanning() check after the join), so any genre row not in
+                            // the seen set is stale (#319).
                             staleCount = mediaFileService.deleteStaleGenres(genres.getGenres());
                         }
                         if (staleCount > 0) {
@@ -511,7 +531,7 @@ public class MediaScannerService implements SmartLifecycle {
 
     private void scanFile(ForkJoinPool pool, MediaFile grandParent, MediaFile parent, MediaFile file, MusicFolder musicFolder, MediaLibraryStatistics statistics,
             Map<String, AtomicInteger> albumCount, Map<String, Artist> artists, Map<String, Album> albums,
-            Set<Integer> albumsInDb, Genres genres) {
+            Set<Integer> albumsInDb, Genres genres, boolean isPartialScan, Set<Integer> scannedFolderIdSet) {
 
         if (file == null) {
             LOG.warn("scanFile called with null file for music folder: {} (path: {})", musicFolder.getName(), musicFolder.getPath());
@@ -541,20 +561,24 @@ public class MediaScannerService implements SmartLifecycle {
         try {
             pool.submit(() -> {
                 if (file.isDirectory()) {
-                    // Update directory metadata (including findCoverArt) BEFORE recursing
-                    // so updateAlbum/updateArtist can read parent.getArt() for child files.
-                    mediaFileService.updateMediaFile(file);
+                    // Persist any pending transient directory cover art BEFORE recursing so
+                    // updateAlbum/updateArtist can read it without issuing a redundant full
+                    // MediaFile UPDATE on every unchanged directory.
+                    if (file.getArt() != null && file.getId() != null) {
+                        coverArtService.persistIfNeeded(file);
+                    }
                     List<MediaFile> childFiles = mediaFileService.getChildrenOf(file, true, true, false, false);
                     // Reading the children refreshes this directory's artist/album snapshot, so
                     // index it afterwards or the document is one scan behind the row (#405).
                     indexManager.index(file, musicFolder);
                     try (Stream<MediaFile> children = childFiles.parallelStream()) {
                         children.forEach(child -> scanFile(pool, parent, file, child, musicFolder, statistics, albumCount,
-                                artists, albums, albumsInDb, genres));
+                                artists, albums, albumsInDb, genres, isPartialScan, scannedFolderIdSet));
                     }
                 } else {
                     if (musicFolder.getType() == MusicFolder.Type.MEDIA) {
-                        updateAlbum(parent, file, musicFolder, statistics.getScanDate(), albumCount, albums, albumsInDb);
+                        updateAlbum(parent, file, musicFolder, statistics.getScanDate(), albumCount, albums, albumsInDb,
+                                isPartialScan, scannedFolderIdSet);
                         updateArtist(grandParent, file, musicFolder, statistics.getScanDate(), albumCount, artists);
                     }
                     statistics.incrementSongs(1);
@@ -622,6 +646,12 @@ public class MediaScannerService implements SmartLifecycle {
     private void updateAlbum(MediaFile parent, MediaFile file, MusicFolder musicFolder,
             Instant lastScanned, Map<String, AtomicInteger> albumCount, Map<String, Album> albums,
             Set<Integer> albumsInDb) {
+        updateAlbum(parent, file, musicFolder, lastScanned, albumCount, albums, albumsInDb, false, Set.of());
+    }
+
+    private void updateAlbum(MediaFile parent, MediaFile file, MusicFolder musicFolder,
+            Instant lastScanned, Map<String, AtomicInteger> albumCount, Map<String, Album> albums,
+            Set<Integer> albumsInDb, boolean isPartialScan, Set<Integer> scannedFolderIdSet) {
 
         String artist = file.getAlbumArtist() != null ? file.getAlbumArtist() : file.getArtist();
         if (file.getAlbumName() == null || artist == null || file.getParentPath() == null || !file.isAudio()) {
@@ -629,6 +659,7 @@ public class MediaScannerService implements SmartLifecycle {
         }
 
         final AtomicBoolean firstEncounter = new AtomicBoolean(false);
+        final AtomicBoolean crossFolderExistingAlbum = new AtomicBoolean(false);
         Album album = albums.compute(file.getAlbumName() + "|" + artist, (k, v) -> {
             Album a = v;
 
@@ -636,10 +667,15 @@ public class MediaScannerService implements SmartLifecycle {
                 a = albumService.getAlbumByArtistAndName(artist, file.getAlbumName()).map(dbAlbum -> {
                     if (!albumsInDb.contains(dbAlbum.getId())) {
                         albumsInDb.add(dbAlbum.getId());
-                        dbAlbum.setDuration(0);
-                        dbAlbum.setSongCount(0);
-                        if (dbAlbum.getPath() != file.getParentPath()) {
-                            dbAlbum.setPath(file.getParentPath());
+                        boolean ownedByUnscannedFolder = isPartialScan
+                                && dbAlbum.getFolder() != null
+                                && !scannedFolderIdSet.contains(dbAlbum.getFolder().getId());
+                        if (!ownedByUnscannedFolder) {
+                            dbAlbum.setDuration(0);
+                            dbAlbum.setSongCount(0);
+                            if (!Objects.equals(dbAlbum.getPath(), file.getParentPath())) {
+                                dbAlbum.setPath(file.getParentPath());
+                            }
                         }
                     }
                     return dbAlbum;
@@ -654,13 +690,19 @@ public class MediaScannerService implements SmartLifecycle {
                 a.setCreated(file.getChanged());
             }
 
+            boolean ownedByUnscannedFolder = isPartialScan
+                    && a.getFolder() != null
+                    && !scannedFolderIdSet.contains(a.getFolder().getId());
+            crossFolderExistingAlbum.set(ownedByUnscannedFolder);
             firstEncounter.set(!lastScanned.equals(a.getLastScanned()));
 
-            if (file.getDuration() != null) {
-                a.incrementDuration(file.getDuration());
-            }
-            if (file.isAudio()) {
-                a.incrementSongCount();
+            if (!ownedByUnscannedFolder) {
+                if (file.getDuration() != null) {
+                    a.incrementDuration(file.getDuration());
+                }
+                if (file.isAudio()) {
+                    a.incrementSongCount();
+                }
             }
 
             a.setLastScanned(lastScanned);
@@ -715,7 +757,9 @@ public class MediaScannerService implements SmartLifecycle {
         }
 
         if (firstEncounter.get()) {
-            album.setFolder(musicFolder);
+            if (!crossFolderExistingAlbum.get()) {
+                album.setFolder(musicFolder);
+            }
             albumService.save(album);
             albumCount.computeIfAbsent(artist, k -> new AtomicInteger(0)).incrementAndGet();
             indexManager.index(album);

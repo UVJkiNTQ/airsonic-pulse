@@ -20,6 +20,7 @@
  */
 package org.airsonic.player.service;
 
+import com.google.common.collect.Lists;
 import com.google.common.math.DoubleMath;
 import com.ibm.icu.text.CharsetDetector;
 import com.ibm.icu.text.CharsetMatch;
@@ -441,24 +442,39 @@ public class MediaFileService {
         }
     }
 
+    private static final int IN_CLAUSE_BATCH_SIZE = 1000;
+
     /**
-     * Returns every track for the given albums in a single query, grouped by {@link AlbumKey}. Only
-     * present audio tracks are returned, matching {@link #getSongsForAlbum}. Albums without tracks
-     * simply have no entry in the map.
+     * Returns every track for the given albums in chunked {@code IN} queries, grouped by
+     * {@link AlbumKey}. Only present audio tracks belonging to the requested albums are returned,
+     * matching {@link #getSongsForAlbum}. Albums without tracks simply have no entry in the map.
      */
     public Map<AlbumKey, List<MediaFile>> getSongsForAlbums(List<Album> albums) {
         if (CollectionUtils.isEmpty(albums)) {
             return Map.of();
         }
-        Set<String> albumNames = albums.stream().map(Album::getName).filter(Objects::nonNull).collect(Collectors.toSet());
-        Set<String> artistNames = albums.stream().map(Album::getArtist).filter(Objects::nonNull).collect(Collectors.toSet());
-        if (albumNames.isEmpty()) {
+        Set<AlbumKey> requestedKeys = albums.stream()
+                .filter(a -> a.getArtist() != null && a.getName() != null)
+                .map(AlbumKey::of)
+                .collect(Collectors.toSet());
+        if (requestedKeys.isEmpty()) {
             return Map.of();
         }
-        return mediaFileRepository
-                .findByAlbumArtistInAndAlbumNameInAndMediaTypeInAndPresentTrue(artistNames, albumNames, MediaType.audioTypes())
-                .stream()
-                .collect(Collectors.groupingBy(m -> new AlbumKey(m.getAlbumArtist(), m.getAlbumName())));
+        List<String> albumNames = new ArrayList<>(requestedKeys.stream().map(AlbumKey::albumName).collect(Collectors.toSet()));
+        List<String> artistNames = new ArrayList<>(requestedKeys.stream().map(AlbumKey::albumArtist).collect(Collectors.toSet()));
+        Map<AlbumKey, List<MediaFile>> result = new HashMap<>();
+        for (List<String> artistBatch : Lists.partition(artistNames, IN_CLAUSE_BATCH_SIZE)) {
+            for (List<String> albumBatch : Lists.partition(albumNames, IN_CLAUSE_BATCH_SIZE)) {
+                for (MediaFile m : mediaFileRepository.findByAlbumArtistInAndAlbumNameInAndMediaTypeInAndPresentTrue(
+                        artistBatch, albumBatch, MediaType.audioTypes())) {
+                    AlbumKey key = AlbumKey.of(m);
+                    if (requestedKeys.contains(key)) {
+                        result.computeIfAbsent(key, k -> new ArrayList<>()).add(m);
+                    }
+                }
+            }
+        }
+        return result;
     }
 
     /**
@@ -552,8 +568,8 @@ public class MediaFileService {
     }
 
     /**
-     * Batches {@link #getArtistByName(String, List)} for a whole page of artist names into a single
-     * query keyed by artist name. Artists with no directory media file are absent.
+     * Batches {@link #getArtistByName(String, List)} for a whole page of artist names into chunked
+     * {@code IN} queries keyed by artist name. Artists with no directory media file are absent.
      */
     public Map<String, MediaFile> getArtistsByName(Collection<String> artistNames, List<MusicFolder> folders) {
         if (CollectionUtils.isEmpty(folders) || artistNames == null || artistNames.isEmpty()) {
@@ -563,9 +579,13 @@ public class MediaFileService {
         if (names.isEmpty()) {
             return Map.of();
         }
-        return mediaFileRepository.findByFolderInAndMediaTypeAndArtistInAndPresentTrue(folders, MediaType.DIRECTORY, names)
-                .stream()
-                .collect(Collectors.toMap(MediaFile::getArtist, Function.identity(), (a, b) -> a));
+        Map<String, MediaFile> result = new HashMap<>();
+        for (List<String> batch : Lists.partition(new ArrayList<>(names), IN_CLAUSE_BATCH_SIZE)) {
+            for (MediaFile mf : mediaFileRepository.findByFolderInAndMediaTypeAndArtistInAndPresentTrue(folders, MediaType.DIRECTORY, batch)) {
+                result.putIfAbsent(mf.getArtist(), mf);
+            }
+        }
+        return result;
     }
 
     /**
@@ -637,6 +657,30 @@ public class MediaFileService {
     @Transactional
     public List<Genre> updateGenres(List <Genre> genres) {
         return genreRepository.saveAll(genres);
+    }
+
+    /**
+     * Inserts only newly discovered genres during a partial (per-folder) scan without overwriting
+     * the global song/album counts of genres already present from unscanned folders.
+     *
+     * @param partialGenres the genres seen during the partial scan
+     * @return the newly inserted genres
+     */
+    @Transactional
+    public List<Genre> mergeGenresForPartialScan(Collection<Genre> partialGenres) {
+        if (partialGenres == null || partialGenres.isEmpty()) {
+            return List.of();
+        }
+        Set<String> existingNames = genreRepository.findAll().stream()
+                .map(Genre::getName)
+                .collect(Collectors.toSet());
+        List<Genre> newGenres = partialGenres.stream()
+                .filter(g -> !existingNames.contains(g.getName()))
+                .toList();
+        if (newGenres.isEmpty()) {
+            return List.of();
+        }
+        return genreRepository.saveAll(newGenres);
     }
 
     /**
@@ -845,27 +889,32 @@ public class MediaFileService {
     }
 
     /**
-     * Batches {@link #getMediaFileStarredDate(MediaFile, String)} for a whole page of media files into a
-     * single {@code IN} query keyed by media file id. Files that are not starred are absent.
+     * Batches {@link #getMediaFileStarredDate(MediaFile, String)} for a whole page of media files into
+     * chunked {@code IN} queries keyed by media file id. Files that are not starred are absent.
      */
     public Map<Integer, Instant> getMediaFileStarredDates(List<MediaFile> mediaFiles, String username) {
         if (mediaFiles == null || mediaFiles.isEmpty()) {
             return Map.of();
         }
-        return starredMediaFileRepository
-                .findByUsernameAndMediaFileIn(username, mediaFiles)
-                .stream()
-                .collect(Collectors.toMap(smf -> smf.getMediaFile().getId(), StarredMediaFile::getCreated, (a, b) -> a));
+        Map<Integer, Instant> result = new HashMap<>();
+        for (List<MediaFile> batch : Lists.partition(mediaFiles, IN_CLAUSE_BATCH_SIZE)) {
+            for (StarredMediaFile smf : starredMediaFileRepository.findByUsernameAndMediaFileIn(username, batch)) {
+                result.putIfAbsent(smf.getMediaFile().getId(), smf.getCreated());
+            }
+        }
+        return result;
     }
 
     public void populateStarredDate(List<MediaFile> mediaFiles, String username) {
         if (mediaFiles == null || mediaFiles.isEmpty()) {
             return;
         }
-        Map<MediaFile, Instant> byMediaFile = starredMediaFileRepository
-                .findByUsernameAndMediaFileIn(username, mediaFiles)
-                .stream()
-                .collect(Collectors.toMap(StarredMediaFile::getMediaFile, StarredMediaFile::getCreated, (a, b) -> a));
+        Map<MediaFile, Instant> byMediaFile = new HashMap<>();
+        for (List<MediaFile> batch : Lists.partition(mediaFiles, IN_CLAUSE_BATCH_SIZE)) {
+            for (StarredMediaFile smf : starredMediaFileRepository.findByUsernameAndMediaFileIn(username, batch)) {
+                byMediaFile.putIfAbsent(smf.getMediaFile(), smf.getCreated());
+            }
+        }
         for (MediaFile mediaFile : mediaFiles) {
             mediaFile.setStarredDate(byMediaFile.get(mediaFile));
         }
@@ -877,8 +926,8 @@ public class MediaFileService {
     }
 
     /**
-     * Batches the {@code getParentOf} lookup for a whole page of media files into a handful of
-     * {@code IN} queries (one per distinct music folder) instead of one round-trip per file. Files
+     * Batches the {@code getParentOf} lookup for a whole page of media files into chunked
+     * {@code IN} queries (per distinct music folder) instead of one round-trip per file. Files
      * whose parent cannot be resolved are simply absent from the returned map.
      */
     public Map<MediaFile, MediaFile> getParentsOf(List<MediaFile> mediaFiles) {
@@ -887,13 +936,16 @@ public class MediaFileService {
         }
         Map<MediaFile, MediaFile> result = new HashMap<>();
         mediaFiles.stream()
-                .filter(mf -> mf.getParentPath() != null)
+                .filter(mf -> mf.getParentPath() != null && mf.getFolder() != null)
                 .collect(Collectors.groupingBy(MediaFile::getFolder))
                 .forEach((folder, files) -> {
                     Set<String> parentPaths = files.stream().map(MediaFile::getParentPath).collect(Collectors.toSet());
-                    Map<String, MediaFile> byPath = mediaFileRepository.findByFolderAndPathIn(folder, parentPaths)
-                            .stream()
-                            .collect(Collectors.toMap(MediaFile::getPath, Function.identity(), (a, b) -> a));
+                    Map<String, MediaFile> byPath = new HashMap<>();
+                    for (List<String> batch : Lists.partition(new ArrayList<>(parentPaths), IN_CLAUSE_BATCH_SIZE)) {
+                        for (MediaFile parent : mediaFileRepository.findByFolderAndPathIn(folder, batch)) {
+                            byPath.putIfAbsent(parent.getPath(), parent);
+                        }
+                    }
                     files.forEach(mf -> {
                         MediaFile parent = byPath.get(mf.getParentPath());
                         if (parent != null) {
@@ -985,6 +1037,7 @@ public class MediaFileService {
         List<MediaFile> result = new ArrayList<>();
 
         // cue tracks
+        List<MediaFile> indexedTracks = List.of();
         if (isEnableCueIndexing) {
             // External .cue files take priority over embedded .flac cue sheets: a FLAC that
             // carries an embedded CUE and also has an external .cue sidecar should be indexed
@@ -1004,7 +1057,7 @@ public class MediaFileService {
             // Sequential outer stream: each FILE block mutates shared scan state (bareFiles.remove,
             // storedChildrenMap) without synchronization, so iterating cue sheets in parallel was a
             // latent data race. A directory holds few cue sheets, so sequential costs nothing.
-            List<MediaFile> indexedTracks = externalCueSheets.entrySet().stream()
+            indexedTracks = externalCueSheets.entrySet().stream()
                     .flatMap(e -> processCueSheetEntry(e, parent, folder, bareFiles, storedChildrenMap, claimedBasePaths))
                     .toList();
             indexedTracks = Stream.concat(
@@ -1013,22 +1066,6 @@ public class MediaFileService {
                             .flatMap(e -> processCueSheetEntry(e, parent, folder, bareFiles, storedChildrenMap, claimedBasePaths)))
                     .toList();
             result.addAll(indexedTracks);
-
-            // Override parent directory metadata from CUE.
-            // CUE sheet metadata takes priority over audio file embedded tags
-            // for single-file + CUE albums.
-            if (!indexedTracks.isEmpty()) {
-                MediaFile firstTrack = indexedTracks.get(0);
-                if (firstTrack.getAlbumName() != null) {
-                    parent.setAlbumName(firstTrack.getAlbumName());
-                    // Also set title so getName() uses it instead of folder name
-                    parent.setTitle(firstTrack.getAlbumName());
-                }
-                if (firstTrack.getAlbumArtist() != null) {
-                    parent.setArtist(firstTrack.getAlbumArtist());
-                    parent.setAlbumArtist(firstTrack.getAlbumArtist());
-                }
-            }
         }
 
         // m4b audio books
@@ -1074,6 +1111,23 @@ public class MediaFileService {
         // by a scan from a release without the refresh), so compare against the child row on
         // every pass (#405). The parent is written below either way.
         refreshAlbumSnapshot(parent, snapshotChild.get());
+
+        // Override parent directory metadata from CUE AFTER refreshAlbumSnapshot so the base
+        // audio file's embedded tags do not clobber CUE sheet metadata on single-file + CUE albums.
+        indexedTracks.stream()
+                .filter(MediaFile::isIndexedTrack)
+                .findFirst()
+                .ifPresent(firstTrack -> {
+                    if (firstTrack.getAlbumName() != null) {
+                        parent.setAlbumName(firstTrack.getAlbumName());
+                        // Also set title so getName() uses it instead of folder name
+                        parent.setTitle(firstTrack.getAlbumName());
+                    }
+                    if (firstTrack.getAlbumArtist() != null) {
+                        parent.setArtist(firstTrack.getAlbumArtist());
+                        parent.setAlbumArtist(firstTrack.getAlbumArtist());
+                    }
+                });
 
         // Update timestamp in parent.
         parent.setChildrenLastUpdated(parent.getChanged());
@@ -1141,10 +1195,12 @@ public class MediaFileService {
                 // MediaFile row if needed), so those bases index correctly too. Windows-authored
                 // CUE sheets separate subdirectories with '\' — normalize to '/' first so the
                 // path resolves on POSIX hosts where '\' is a legal filename character.
-                Path baseRelative = Paths.get(parent.getPath()).resolve(normalizeCueFilePath(filePath)).normalize();
-                base = getMediaFile(baseRelative, folder);
-                if (Objects.nonNull(base)) {
-                    bareFiles.remove(FilenameUtils.getName(base.getPath()));
+                Path baseRelative = resolveCueBasePath(parent.getPath(), filePath, folder.getPath());
+                if (Objects.nonNull(baseRelative)) {
+                    base = getMediaFile(baseRelative, folder);
+                    if (Objects.nonNull(base)) {
+                        bareFiles.remove(FilenameUtils.getName(base.getPath()));
+                    }
                 }
             }
 
@@ -1185,6 +1241,45 @@ public class MediaFileService {
      */
     static String normalizeCueFilePath(String filePath) {
         return filePath.replace('\\', '/');
+    }
+
+    /**
+     * Resolves a CUE {@code FILE} reference relative to {@code parentPath} while enforcing that the
+     * resolved path remains within {@code folderRoot}. Rejects absolute paths, Windows drive-letter
+     * paths, and {@code ..} sequences that escape the music folder.
+     *
+     * @return the normalized folder-relative path, or {@code null} if invalid or escaping the root
+     */
+    @Nullable
+    static Path resolveCueBasePath(String parentPath, String filePath, Path folderRoot) {
+        if (StringUtils.isBlank(filePath) || folderRoot == null) {
+            return null;
+        }
+        String normalized = normalizeCueFilePath(filePath);
+        // Reject Windows drive-letter prefixes (e.g. "C:/music/a.flac") and UNC/absolute paths.
+        if (normalized.startsWith("/") || (normalized.length() >= 2 && normalized.charAt(1) == ':')) {
+            LOG.warn("Rejecting absolute CUE FILE path '{}'", filePath);
+            return null;
+        }
+        Path candidate;
+        try {
+            candidate = Paths.get(normalized);
+        } catch (java.nio.file.InvalidPathException e) {
+            LOG.warn("Rejecting invalid CUE FILE path '{}'", filePath);
+            return null;
+        }
+        if (candidate.isAbsolute()) {
+            LOG.warn("Rejecting absolute CUE FILE path '{}'", filePath);
+            return null;
+        }
+        Path baseRelative = Paths.get(parentPath == null ? "" : parentPath).resolve(candidate).normalize();
+        Path normalizedRoot = folderRoot.toAbsolutePath().normalize();
+        Path resolved = normalizedRoot.resolve(baseRelative).normalize();
+        if (baseRelative.isAbsolute() || !resolved.startsWith(normalizedRoot)) {
+            LOG.warn("Rejecting CUE FILE path '{}' escaping music folder '{}'", filePath, folderRoot);
+            return null;
+        }
+        return baseRelative;
     }
 
     /**

@@ -1,5 +1,6 @@
 package org.airsonic.player.service;
 
+import com.google.common.collect.Lists;
 import org.airsonic.player.domain.Album;
 import org.airsonic.player.domain.Artist;
 import org.airsonic.player.domain.CoverArt;
@@ -29,11 +30,11 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 @Service
 public class CoverArtService {
@@ -49,6 +50,8 @@ public class CoverArtService {
     private CoverArtCache coverArtCache;
 
     private static final Logger LOG = LoggerFactory.getLogger(CoverArtService.class);
+
+    private static final int IN_CLAUSE_BATCH_SIZE = 1000;
 
     @Transactional
     public void upsert(CoverArt art) {
@@ -124,16 +127,11 @@ public class CoverArtService {
     }
 
     /**
-     * Batches the {@link #getAlbumArt(Integer)} lookup for a set of album ids into a single
-     * {@code IN} query. Ids with no cover art are absent from the map.
+     * Batches the {@link #getAlbumArt(Integer)} lookup for a set of album ids into chunked
+     * {@code IN} queries. Ids with no cover art are absent from the map.
      */
     public Map<Integer, CoverArt> getAlbumArts(Collection<Integer> ids) {
-        if (ids == null || ids.isEmpty()) {
-            return Map.of();
-        }
-        return coverArtRepository.findByEntityTypeAndEntityIdIn(EntityType.ALBUM, ids)
-                .stream()
-                .collect(Collectors.toMap(CoverArt::getEntityId, Function.identity(), (a, b) -> a));
+        return getCoverArtsBatched(EntityType.ALBUM, ids);
     }
 
     public CoverArt getArtistArt(Integer id) {
@@ -147,16 +145,11 @@ public class CoverArtService {
     }
 
     /**
-     * Batches the {@link #getArtistArt(Integer)} lookup for a set of artist ids into a single
-     * {@code IN} query. Ids with no cover art are absent from the map.
+     * Batches the {@link #getArtistArt(Integer)} lookup for a set of artist ids into chunked
+     * {@code IN} queries. Ids with no cover art are absent from the map.
      */
     public Map<Integer, CoverArt> getArtistArts(Collection<Integer> ids) {
-        if (ids == null || ids.isEmpty()) {
-            return Map.of();
-        }
-        return coverArtRepository.findByEntityTypeAndEntityIdIn(EntityType.ARTIST, ids)
-                .stream()
-                .collect(Collectors.toMap(CoverArt::getEntityId, Function.identity(), (a, b) -> a));
+        return getCoverArtsBatched(EntityType.ARTIST, ids);
     }
 
     public CoverArt getMediaFileArt(@Param("id") int id) {
@@ -170,17 +163,25 @@ public class CoverArtService {
     }
 
     /**
-     * Batches the {@link #getMediaFileArt(int)} lookup for a set of media file ids into a single
-     * {@code IN} query. Ids with no cover art are absent from the map (callers should treat them
+     * Batches the {@link #getMediaFileArt(int)} lookup for a set of media file ids into chunked
+     * {@code IN} queries. Ids with no cover art are absent from the map (callers should treat them
      * like {@link CoverArt#NULL_ART}).
      */
     public Map<Integer, CoverArt> getMediaFileArts(Collection<Integer> ids) {
+        return getCoverArtsBatched(EntityType.MEDIA_FILE, ids);
+    }
+
+    private Map<Integer, CoverArt> getCoverArtsBatched(EntityType type, Collection<Integer> ids) {
         if (ids == null || ids.isEmpty()) {
             return Map.of();
         }
-        return coverArtRepository.findByEntityTypeAndEntityIdIn(EntityType.MEDIA_FILE, ids)
-                .stream()
-                .collect(Collectors.toMap(CoverArt::getEntityId, Function.identity(), (a, b) -> a));
+        Map<Integer, CoverArt> result = new HashMap<>();
+        for (List<Integer> batch : Lists.partition(new ArrayList<>(ids), IN_CLAUSE_BATCH_SIZE)) {
+            for (CoverArt art : coverArtRepository.findByEntityTypeAndEntityIdIn(type, batch)) {
+                result.putIfAbsent(art.getEntityId(), art);
+            }
+        }
+        return result;
     }
 
     @Nullable

@@ -284,15 +284,15 @@ public class MediaScannerService implements SmartLifecycle {
                 : (isFullScan ? scanConfig.getFullTimeout() : scanConfig.getTimeout());
         MediaLibraryStatistics statistics = new MediaLibraryStatistics();
 
-        // Exclude disabled and non-existing (e.g. temporarily unmounted network) folders so an
-        // unmounted drive is never wiped by markNonPresent + indexManager.expunge().
+        // Exclude disabled and non-existing folders (matching upstream getAllMusicFolders()).
         List<MusicFolder> allActiveFolders = mediaFolderService.getAllMusicFolders();
+        boolean hasRequestedFolders = folderIds != null && !folderIds.isEmpty();
         List<MusicFolder> foldersToScan = allActiveFolders.stream()
-                .filter(f -> folderIds == null || folderIds.isEmpty() || folderIds.contains(f.getId()))
+                .filter(f -> !hasRequestedFolders || folderIds.contains(f.getId()))
                 .toList();
 
-        if (foldersToScan.isEmpty()) {
-            LOG.info("No music folders to scan.");
+        if (hasRequestedFolders && foldersToScan.isEmpty()) {
+            LOG.info("No matching active music folders to scan for requested IDs: {}", folderIds);
             setScanning(false);
             setMediaScanning(false);
             activePool = null;
@@ -304,7 +304,7 @@ public class MediaScannerService implements SmartLifecycle {
         List<Integer> allActiveIds = allActiveFolders.stream()
                 .map(MusicFolder::getId).toList();
         List<Integer> scannedIds = foldersToScan.stream().map(MusicFolder::getId).toList();
-        boolean isPartialScan = !allActiveIds.equals(scannedIds);
+        boolean isPartialScan = hasRequestedFolders && !allActiveIds.equals(scannedIds);
 
         LOG.info("Starting {} scan for {} of {} folder(s), timeout {} s ({}).",
                 isFullScan ? "full" : "quick", foldersToScan.size(), allActiveFolders.size(), timeoutSeconds,

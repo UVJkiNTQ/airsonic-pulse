@@ -16,6 +16,7 @@ import jakarta.annotation.Nullable;
 import jakarta.annotation.PreDestroy;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
@@ -48,6 +49,7 @@ public class NeteaseLyricsProvider {
     private static final int TIMEOUT_MS = 5_000;
     private static final int SEARCH_LIMIT = 10;
     private static final int MIN_SCORE = 50;
+    private static final int MAX_RESPONSE_BYTES = 1_048_576;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final CloseableHttpClient httpClient = HttpClients.createDefault();
@@ -118,8 +120,21 @@ public class NeteaseLyricsProvider {
         request.setHeader("User-Agent", USER_AGENT);
         request.setHeader("Accept", "application/json");
         try (CloseableHttpResponse response = httpClient.execute(request)) {
-            String body = EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8);
-            return objectMapper.readTree(body);
+            int status = response.getStatusLine() == null ? -1 : response.getStatusLine().getStatusCode();
+            if (status < 200 || status >= 300) {
+                EntityUtils.consumeQuietly(response.getEntity());
+                throw new IOException("Unexpected HTTP status " + status + " from NetEase");
+            }
+            if (response.getEntity() == null) {
+                throw new IOException("Empty response entity from NetEase");
+            }
+            try (InputStream in = response.getEntity().getContent()) {
+                byte[] bytes = in.readNBytes(MAX_RESPONSE_BYTES + 1);
+                if (bytes.length > MAX_RESPONSE_BYTES) {
+                    throw new IOException("NetEase response exceeded " + MAX_RESPONSE_BYTES + " bytes");
+                }
+                return objectMapper.readTree(new String(bytes, StandardCharsets.UTF_8));
+            }
         }
     }
 
@@ -160,9 +175,16 @@ public class NeteaseLyricsProvider {
         result = 50;
         String wantedBy = normalize(wantedArtist);
         String candidateBy = normalize(candidateArtist);
-        if (!wantedBy.isEmpty() && !candidateBy.isEmpty()
-                && (wantedBy.equals(candidateBy) || wantedBy.contains(candidateBy) || candidateBy.contains(wantedBy))) {
-            result += 30;
+        if (!wantedBy.isEmpty() && !candidateBy.isEmpty()) {
+            if (wantedBy.equals(candidateBy) || wantedBy.contains(candidateBy) || candidateBy.contains(wantedBy)) {
+                result += 30;
+            } else {
+                // Penalize explicit artist mismatch so a title-only collision with missing
+                // duration does not cross MIN_SCORE and persist wrong lyrics permanently.
+                // A tight duration match (diff <= 2s: +15 -> 55 >= 50) can still disambiguate
+                // romanized vs native artist names (e.g. "Jay Chou" vs "周杰伦").
+                result -= 10;
+            }
         }
         if (wantedDuration != null && wantedDuration > 0 && candidateDuration != null && candidateDuration > 0) {
             double diff = Math.abs(wantedDuration - candidateDuration);

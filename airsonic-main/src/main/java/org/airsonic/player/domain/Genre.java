@@ -39,7 +39,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class Genre implements Persistable<String> {
 
     @Id
-    @Column(name = "name", length = 1024)
+    @Column(name = "name")
     private String name;
 
     @Column(name = "song_count")

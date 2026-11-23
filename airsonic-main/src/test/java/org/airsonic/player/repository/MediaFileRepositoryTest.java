@@ -248,4 +248,17 @@ public class MediaFileRepositoryTest {
                 namesOf(hits));
     }
 
+    @Test
+    public void testFindByGenreIsCaseInsensitive() {
+        saveGenreFixture("rock-song.mp3", MediaType.MUSIC, "Rock", "Rock;Metal");
+        saveGenreFixture("legacy-song.mp3", MediaType.MUSIC, "Metal", null);
+
+        Pageable page = PageRequest.of(0, 100);
+        List<MediaFile> hits = mediaFileRepository
+                .findByFolderInAndMediaTypeInAndGenreAndPresentTrue(
+                        List.of(testFolder), List.of(MediaType.MUSIC), "metal", page);
+
+        assertEquals(List.of("legacy-song.mp3", "rock-song.mp3"), namesOf(hits));
+    }
+
 }

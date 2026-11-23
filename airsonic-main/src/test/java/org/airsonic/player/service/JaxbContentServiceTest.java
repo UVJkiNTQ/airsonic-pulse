@@ -299,6 +299,7 @@ class JaxbContentServiceTest {
 
             MediaFile trackA = mockTrack(1, "Track A", "Artist A", "Album A");
             MediaFile trackB = mockTrack(2, "Track B", "Artist B", "Album B");
+            when(mediaFileService.showMediaFile(any())).thenReturn(true);
             when(mediaFileService.getSongsForAlbums(List.of(album1, album2)))
                     .thenReturn(Map.of(
                             new MediaFileService.AlbumKey("Artist A", "Album A"), List.of(trackA),
@@ -313,6 +314,30 @@ class JaxbContentServiceTest {
             assertEquals("Track B", result.get(1).getSong().get(0).getTitle());
             // Child rendering uses one shared context for the whole page, never a per-child parent lookup.
             verify(mediaFileService, never()).getParentOf(any());
+        }
+
+        @Test
+        void createJaxbAlbums_withPlayer_omitsHiddenMediaFiles() {
+            Album album1 = mock(Album.class);
+            when(album1.getId()).thenReturn(1);
+            when(album1.getName()).thenReturn("Album A");
+            when(album1.getArtist()).thenReturn("Artist A");
+            when(coverArtService.getAlbumArts(Set.of(1))).thenReturn(Map.of(1, coverArt));
+            when(artistService.getArtistsByName(Set.of("Artist A"))).thenReturn(Map.of());
+            when(albumService.getAlbumStarredDates(Set.of(1), "user")).thenReturn(Map.of());
+
+            MediaFile hiddenBase = mock(MediaFile.class);
+            MediaFile visibleTrack = mockTrack(2, "Track 1", "Artist A", "Album A");
+            when(mediaFileService.showMediaFile(hiddenBase)).thenReturn(false);
+            when(mediaFileService.showMediaFile(visibleTrack)).thenReturn(true);
+            when(mediaFileService.getSongsForAlbums(List.of(album1)))
+                    .thenReturn(Map.of(new MediaFileService.AlbumKey("Artist A", "Album A"), List.of(hiddenBase, visibleTrack)));
+
+            List<AlbumID3> result = service.createJaxbAlbums(mock(Player.class), List.of(album1), "user", a -> new AlbumID3());
+
+            assertEquals(1, result.size());
+            assertEquals(1, result.get(0).getSong().size());
+            assertEquals("Track 1", result.get(0).getSong().get(0).getTitle());
         }
 
         private MediaFile mockTrack(int id, String name, String artist, String albumName) {
@@ -1143,6 +1168,39 @@ class JaxbContentServiceTest {
             verify(ratingService, never()).getAverageRating(any());
             verify(albumService, never()).getAlbumByMediaFile(any());
             verify(artistService, never()).getArtist(anyString());
+        }
+
+        @Test
+        void createJaxbChildren_preloadsContributorArtistIds() {
+            Player player = mock(Player.class);
+            MediaFile song = mock(MediaFile.class);
+            when(song.getId()).thenReturn(1);
+            when(song.isDirectory()).thenReturn(false);
+            when(song.isFile()).thenReturn(true);
+            when(song.getName()).thenReturn("a.mp3");
+            when(song.getArtist()).thenReturn("Main Artist");
+            when(song.getFormat()).thenReturn("mp3");
+            when(song.getMediaType()).thenReturn(org.airsonic.player.domain.MediaFile.MediaType.MUSIC);
+            when(song.getContributors()).thenReturn(org.airsonic.player.domain.Contributors.pack(
+                    List.of(new org.airsonic.player.domain.Contributor("composer", null, "Guest Composer"))));
+
+            org.airsonic.player.domain.Artist composer = new org.airsonic.player.domain.Artist("Guest Composer");
+            composer.setId(42);
+            when(mediaFileService.getParentsOf(List.of(song))).thenReturn(Map.of());
+            when(coverArtService.getMediaFileArts(Set.of())).thenReturn(Map.of());
+            when(mediaFileService.getMediaFileStarredDates(List.of(song), "user")).thenReturn(Map.of());
+            when(ratingService.getRatingsForUser("user", List.of(song))).thenReturn(Map.of());
+            when(ratingService.getAverageRatings(List.of(song))).thenReturn(Map.of());
+            when(albumService.getAlbumsByMediaFiles(List.of(song))).thenReturn(Map.of());
+            when(artistService.getArtistsByName(Set.of("Main Artist", "Guest Composer")))
+                    .thenReturn(Map.of("Guest Composer", composer));
+
+            List<Child> result = service.createJaxbChildren(player, List.of(song), "user", s -> new Child());
+
+            assertEquals(1, result.size());
+            assertEquals(1, result.get(0).getContributors().size());
+            assertEquals("42", result.get(0).getContributors().get(0).getArtist().getId());
+            assertEquals("Guest Composer", result.get(0).getContributors().get(0).getArtist().getName());
         }
     }
 

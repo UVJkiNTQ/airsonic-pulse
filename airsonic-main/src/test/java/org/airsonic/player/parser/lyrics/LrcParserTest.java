@@ -119,4 +119,25 @@ class LrcParserTest {
         assertNull(parser.parseText(null));
         assertNull(parser.parseText("  "));
     }
+
+    @Test
+    void parseTextShouldHandleBracketsInTextJsonCreditsAndMillisecondPrecision() {
+        String lrc = """
+                {"t":0,"c":[{"tx":"作词: 方文山"}]}
+                [by:someone]
+                [00:28.955][Chorus] First line [x2]
+                [00:32.38][00:40.5]Repeated line
+                """;
+        LrcFile lrcFile = parser.parseText(lrc);
+
+        assertNotNull(lrcFile);
+        List<LyricsLine> lines = lrcFile.getLyricsLines();
+        assertEquals(3, lines.size());
+        assertEquals("[Chorus] First line [x2]", lines.get(0).getText());
+        assertEquals(28_955, lines.get(0).getTime());
+        assertEquals("Repeated line", lines.get(1).getText());
+        assertEquals(32_380, lines.get(1).getTime());
+        assertEquals("Repeated line", lines.get(2).getText());
+        assertEquals(40_500, lines.get(2).getTime());
+    }
 }

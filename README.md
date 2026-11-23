@@ -12,7 +12,7 @@ All modifications in this repository are written with **GitHub Copilot**, powere
 
 ## Changelog (from forking)
 
-- **Cue sheet handling** — builds new CUE parser (replacing strict `cuelib-core`, supporting extended/non-standard sheets: long titles, 99+ min time codes, non-zero first INDEX, special characters, REPLAYGAIN, empty lines, non-standard CATALOG/ISRC); BOM-first charset detection to prevent Japanese mojibake; dot-prefixed media files no longer excluded; added `tta`/`ac3`/`tak` to default music types; fixed multi-cue shared-base resolution and subdirectory FILE paths; corrected shared-base after upstream merge; fixed negative-track metadata leak and tracks with missing INDEX
-- **Database** — increased varchar column limit 384→1024 for ensemble artist names; prevented duplicate album/artist errors during scan; propagated saved IDs back to original objects
+- **Cue sheet handling** — builds new CUE parser (replacing strict `cuelib-core`, supporting extended/non-standard sheets: long titles, 99+ min time codes, non-zero first INDEX, special characters, REPLAYGAIN, empty lines, non-standard CATALOG/ISRC); BOM-first charset detection to prevent Japanese mojibake; added `tta`/`ac3`/`tak` to default music types; fixed multi-cue shared-base resolution and subdirectory FILE paths; corrected shared-base after upstream merge; fixed negative-track metadata leak and tracks with missing INDEX
+- **Database** — widened unindexed `media_file` and `lyrics` text columns on MariaDB/MySQL while keeping `mysqlVarcharLimit=384` safe for InnoDB composite indexes; prevented duplicate album/artist errors during scan; propagated saved IDs back to original objects
 - **Scanner** — handled null root MediaFile and Chapter ID overflow
 - **CI** — upload `.war` as build artifact on push

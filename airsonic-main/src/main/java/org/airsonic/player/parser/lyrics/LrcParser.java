@@ -34,10 +34,14 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class LrcParser {
 
     private static final Logger LOG = LoggerFactory.getLogger(LrcParser.class);
+    private static final Pattern LEADING_TIMESTAMPS = Pattern.compile("^((?:\\[\\d{1,3}:\\d{2}(?:\\.\\d{1,3})?\\])+)(.*)$");
+    private static final Pattern SINGLE_TIMESTAMP = Pattern.compile("\\[(\\d{1,3}:\\d{2}(?:\\.\\d{1,3})?)\\]");
 
     /**
      * Parses a LRC file and returns a list of LyricsLine objects.
@@ -112,44 +116,62 @@ public class LrcParser {
 
     private LrcFile parseLines(List<String> rawLines, Instant lastModified) {
         List<LyricsLine> lines = new ArrayList<>();
-        for (String line : rawLines) {
-            // Ignore extended format meta information lines
-            if (line.matches("\\[\\w+?:.*\\]")) {
+        for (String rawLine : rawLines) {
+            if (rawLine == null) {
                 continue;
             }
-            // Remove A2 Extension part (e.g., <...> after time tag)
-            line = line.replaceAll("(^\\[\\d{2}:\\d{2}(\\.\\d{2,3})?\\])\\s*<.*?>", "$1");
-            // Also remove any <...> that may appear after the time tag
-            line = line.replaceAll("\\s<.*?>", "");
+            String line = rawLine.trim();
+            if (line.isEmpty()) {
+                continue;
+            }
+            Matcher lineMatcher = LEADING_TIMESTAMPS.matcher(line);
+            if (!lineMatcher.matches()) {
+                if (line.matches("^\\[\\d[^\\]]*\\].*")) {
+                    // Reject malformed numeric time tags (e.g. [00:40:73]) to match existing LRC validation.
+                    LOG.warn("Invalid LRC time tag line: {}", line);
+                    throw new IllegalArgumentException("Invalid LRC time tag line: " + line);
+                }
+                // Skip metadata tags ([ar:...], [by:...]), NetEase JSON credit lines, or untimed text.
+                continue;
+            }
+            String timestampPrefix = lineMatcher.group(1);
+            String text = lineMatcher.group(2);
+            // Remove A2 Extension inline word timestamps (e.g., <00:12.34>)
+            text = text.replaceAll("^\\s*<.*?>", "");
+            text = text.replaceAll("\\s<.*?>", "");
+            text = text.trim();
 
-            String[] parts = line.split("]");
-            for (int i = 0; i < parts.length - 1; i++) {
-                String timeTag = parts[i].replace("[", "").trim();
-                String text = parts[parts.length - 1].trim();
-                long time = parseTimeTag(timeTag);
+            Matcher tagMatcher = SINGLE_TIMESTAMP.matcher(timestampPrefix);
+            while (tagMatcher.find()) {
+                long time = parseTimeTag(tagMatcher.group(1));
                 lines.add(new LyricsLine(time, text));
             }
         }
-        return new LrcFile(lines, lastModified);
+        return lines.isEmpty() ? null : new LrcFile(lines, lastModified);
     }
 
     private long parseTimeTag(String tag) {
-        // tag format: mm:ss.xx or mm:ss
+        // tag format: mm:ss.xxx, mm:ss.xx, mm:ss.x, or mm:ss
         String[] minSec = tag.split(":");
         if (minSec.length != 2) {
             LOG.warn("Invalid LRC time tag format: {}", tag);
             throw new IllegalArgumentException("Invalid LRC time tag format: " + tag);
         }
         int min = Integer.parseInt(minSec[0]);
-        String[] secHundredths = minSec[1].split("\\.");
-        int sec = Integer.parseInt(secHundredths[0]);
+        String[] secFraction = minSec[1].split("\\.");
+        int sec = Integer.parseInt(secFraction[0]);
         int ms = 0;
-        if (secHundredths.length > 1) {
-            // xx is hundredths of a second, so multiply by 10 to get milliseconds
-            int hundredths = Integer.parseInt((secHundredths[1] + "0").substring(0, 2));
-            ms = hundredths * 10;
+        if (secFraction.length > 1 && !secFraction[1].isEmpty()) {
+            String frac = secFraction[1];
+            if (frac.length() == 1) {
+                ms = Integer.parseInt(frac) * 100;
+            } else if (frac.length() == 2) {
+                ms = Integer.parseInt(frac) * 10;
+            } else {
+                ms = Integer.parseInt(frac.substring(0, 3));
+            }
         }
-        return min * 60_000 + sec * 1000 + ms;
+        return min * 60_000L + sec * 1000L + ms;
     }
 
 }

@@ -47,7 +47,7 @@
             });
             var url = 'musicFolderSettings?scanNow';
             for (var i = 0; i < folderIds.length; i++) {
-                url += '&scanFolderId=' + folderIds[i];
+                url += '&scanFolderId=' + encodeURIComponent(folderIds[i]);
             }
             window.location.href = url;
         }
@@ -73,8 +73,10 @@
     </tr>
 
     <tr th:each="folder, loopStatus: *{musicFolders}">
-        <input type="hidden" th:field="*{musicFolders[__${loopStatus.index}__].id}"/>
-        <td><input th:field="*{musicFolders[__${loopStatus.index}__].name}" style="width:90%"/></td>
+        <td>
+            <input type="hidden" th:field="*{musicFolders[__${loopStatus.index}__].id}"/>
+            <input th:field="*{musicFolders[__${loopStatus.index}__].name}" style="width:90%"/>
+        </td>
         <td><input th:field="*{musicFolders[__${loopStatus.index}__].path}" style="width:90%"/></td>
         <td align="center"><span th:text="${folder.type}"></span></td>
         <td align="center">

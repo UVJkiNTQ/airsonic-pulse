@@ -1,5 +1,6 @@
 package org.airsonic.player.service;
 
+import com.google.common.collect.Lists;
 import org.airsonic.player.build.UnmodifiableResult;
 import org.airsonic.player.domain.Album;
 import org.airsonic.player.domain.MediaFile;
@@ -16,6 +17,7 @@ import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -75,9 +77,11 @@ public class AlbumService {
         return albumRepository.findByArtistAndName(mediaFile.getAlbumArtist(), mediaFile.getAlbumName()).orElse(null);
     }
 
+    private static final int IN_CLAUSE_BATCH_SIZE = 1000;
+
     /**
-     * Batches {@link #getAlbumByMediaFile(MediaFile)} for a whole page of media files into a single
-     * {@code IN} query keyed by {@link MediaFileService.AlbumKey}. Files whose album cannot be
+     * Batches {@link #getAlbumByMediaFile(MediaFile)} for a whole page of media files into chunked
+     * {@code IN} queries keyed by {@link MediaFileService.AlbumKey}. Files whose album cannot be
      * resolved are absent from the map.
      */
     public Map<MediaFileService.AlbumKey, Album> getAlbumsByMediaFiles(Collection<MediaFile> mediaFiles) {
@@ -90,8 +94,14 @@ public class AlbumService {
             return Map.of();
         }
         Map<MediaFileService.AlbumKey, Album> byKey = new HashMap<>();
-        for (Album album : albumRepository.findByArtistInAndNameIn(artists, names)) {
-            byKey.putIfAbsent(new MediaFileService.AlbumKey(album.getArtist(), album.getName()), album);
+        List<String> artistList = new ArrayList<>(artists);
+        List<String> nameList = new ArrayList<>(names);
+        for (List<String> artistBatch : Lists.partition(artistList, IN_CLAUSE_BATCH_SIZE)) {
+            for (List<String> nameBatch : Lists.partition(nameList, IN_CLAUSE_BATCH_SIZE)) {
+                for (Album album : albumRepository.findByArtistInAndNameIn(artistBatch, nameBatch)) {
+                    byKey.putIfAbsent(new MediaFileService.AlbumKey(album.getArtist(), album.getName()), album);
+                }
+            }
         }
         return byKey;
     }
@@ -315,18 +325,23 @@ public class AlbumService {
     }
 
     /**
-     * Batches {@link #getAlbumStarredDate(Integer, String)} for a whole page of albums into a single
-     * {@code IN} query keyed by album id. Albums that are not starred are absent.
+     * Batches {@link #getAlbumStarredDate(Integer, String)} for a whole page of albums into chunked
+     * {@code IN} queries keyed by album id. Albums that are not starred are absent.
      */
     @Transactional(readOnly = true)
     public Map<Integer, Instant> getAlbumStarredDates(Collection<Integer> albumIds, String username) {
         if (albumIds == null || albumIds.isEmpty() || !StringUtils.hasLength(username)) {
             return Map.of();
         }
-        return albumRepository.findByIdInAndStarredAlbumsUsername(albumIds, username)
-                .stream()
-                .filter(a -> !a.getStarredAlbums().isEmpty())
-                .collect(Collectors.toMap(Album::getId, a -> a.getStarredAlbums().get(0).getCreated(), (x, y) -> x));
+        Map<Integer, Instant> result = new HashMap<>();
+        for (List<Integer> batch : Lists.partition(new ArrayList<>(albumIds), IN_CLAUSE_BATCH_SIZE)) {
+            for (Album a : albumRepository.findByIdInAndStarredAlbumsUsername(batch, username)) {
+                if (!a.getStarredAlbums().isEmpty()) {
+                    result.putIfAbsent(a.getId(), a.getStarredAlbums().get(0).getCreated());
+                }
+            }
+        }
+        return result;
     }
 
     /**
@@ -470,6 +485,12 @@ public class AlbumService {
                 }
                 if (album.getMusicBrainzReleaseId() != null) {
                     existing.setMusicBrainzReleaseId(album.getMusicBrainzReleaseId());
+                }
+                if (album.getReplayGainAlbumGain() != null) {
+                    existing.setReplayGainAlbumGain(album.getReplayGainAlbumGain());
+                }
+                if (album.getReplayGainAlbumPeak() != null) {
+                    existing.setReplayGainAlbumPeak(album.getReplayGainAlbumPeak());
                 }
                 if (album.getCreated() != null) {
                     existing.setCreated(album.getCreated());

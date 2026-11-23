@@ -47,6 +47,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -351,7 +352,9 @@ public class JaxbContentService {
                         T jaxbAlbum = createJaxbAlbum(factory.apply(a), a, username, albumTracks);
                         if (player != null && albumTracks != null) {
                             for (MediaFile mf : albumTracks) {
-                                jaxbAlbum.getSong().add(createJaxbChild(player, mf, username));
+                                if (mediaFileService.showMediaFile(mf)) {
+                                    jaxbAlbum.getSong().add(createJaxbChild(player, mf, username));
+                                }
                             }
                         }
                         return jaxbAlbum;
@@ -359,12 +362,13 @@ public class JaxbContentService {
                     .toList();
         }
         AlbumRenderContext ctx = preloadAlbumContext(albums, username);
-        List<MediaFile> allTracks = albums.stream()
+        List<MediaFile> allVisibleTracks = player == null ? List.of() : albums.stream()
                 .map(a -> ctx.tracksByAlbum.get(MediaFileService.AlbumKey.of(a)))
                 .filter(Objects::nonNull)
                 .flatMap(List::stream)
+                .filter(mediaFileService::showMediaFile)
                 .toList();
-        ChildRenderContext childCtx = allTracks.isEmpty() ? null : preloadChildContext(allTracks, username);
+        ChildRenderContext childCtx = allVisibleTracks.isEmpty() ? null : preloadChildContext(allVisibleTracks, username);
         return albums.stream()
                 .map(a -> {
                     T jaxbAlbum = createJaxbAlbum(factory.apply(a), a, username, ctx.tracksByAlbum.get(MediaFileService.AlbumKey.of(a)), ctx);
@@ -372,7 +376,9 @@ public class JaxbContentService {
                         List<MediaFile> albumTracks = ctx.tracksByAlbum.get(MediaFileService.AlbumKey.of(a));
                         if (albumTracks != null) {
                             for (MediaFile mf : albumTracks) {
-                                jaxbAlbum.getSong().add(createJaxbChild(new Child(), player, mf, username, childCtx));
+                                if (mediaFileService.showMediaFile(mf)) {
+                                    jaxbAlbum.getSong().add(createJaxbChild(new Child(), player, mf, username, childCtx));
+                                }
                             }
                         }
                     }
@@ -684,8 +690,18 @@ public class JaxbContentService {
         Map<Integer, Integer> userRatings = ratingService.getRatingsForUser(username, mediaFiles);
         Map<Integer, Double> averageRatings = ratingService.getAverageRatings(mediaFiles);
         Map<MediaFileService.AlbumKey, Album> albumsByKey = albumService.getAlbumsByMediaFiles(mediaFiles);
-        Map<String, org.airsonic.player.domain.Artist> artistsByName = artistService.getArtistsByName(
-                mediaFiles.stream().map(MediaFile::getArtist).filter(Objects::nonNull).collect(Collectors.toSet()));
+        Set<String> artistNames = new HashSet<>();
+        for (MediaFile mf : mediaFiles) {
+            if (mf.getArtist() != null) {
+                artistNames.add(mf.getArtist());
+            }
+            for (org.airsonic.player.domain.Contributor c : Contributors.split(mf.getContributors())) {
+                if (c.name() != null) {
+                    artistNames.add(c.name());
+                }
+            }
+        }
+        Map<String, org.airsonic.player.domain.Artist> artistsByName = artistService.getArtistsByName(artistNames);
         return new ChildRenderContext(parents, coverArtByMediaFileId, starredDates, userRatings, averageRatings, albumsByKey, artistsByName);
     }
 

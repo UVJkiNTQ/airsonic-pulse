@@ -18,6 +18,7 @@
  */
 package org.airsonic.player.service;
 
+import com.google.common.collect.Lists;
 import org.airsonic.player.domain.Artist;
 import org.airsonic.player.domain.MediaFile;
 import org.airsonic.player.domain.MusicFolder;
@@ -39,6 +40,7 @@ import jakarta.annotation.Nonnull;
 import jakarta.annotation.Nullable;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -132,8 +134,10 @@ public class ArtistService {
         return artistRepository.findByNameAndFolderIn(artistName, musicFolders).orElse(null);
     }
 
+    private static final int IN_CLAUSE_BATCH_SIZE = 1000;
+
     /**
-     * Batches {@link #getArtist(String)} for a set of artist names into a single {@code IN} query,
+     * Batches {@link #getArtist(String)} for a set of artist names into chunked {@code IN} queries,
      * populating the by-name cache for the misses. Names with no artist record are absent.
      */
     public Map<String, Artist> getArtistsByName(Collection<String> artistNames) {
@@ -156,9 +160,11 @@ public class ArtistService {
             }
         }
         if (!missing.isEmpty()) {
-            for (Artist artist : artistRepository.findByNameIn(missing)) {
-                artistByNameCache.put(artist.getName(), Optional.of(artist));
-                result.put(artist.getName(), artist);
+            for (List<String> batch : Lists.partition(new ArrayList<>(missing), IN_CLAUSE_BATCH_SIZE)) {
+                for (Artist artist : artistRepository.findByNameIn(batch)) {
+                    artistByNameCache.put(artist.getName(), Optional.of(artist));
+                    result.put(artist.getName(), artist);
+                }
             }
             // Cache explicit negatives too so repeated calls stay single-query.
             for (String name : missing) {
@@ -245,18 +251,23 @@ public class ArtistService {
     }
 
     /**
-     * Batches {@link #getStarredDate(Integer, String)} for a whole page of artists into a single
-     * {@code IN} query keyed by artist id. Artists that are not starred are absent.
+     * Batches {@link #getStarredDate(Integer, String)} for a whole page of artists into chunked
+     * {@code IN} queries keyed by artist id. Artists that are not starred are absent.
      */
     @Transactional(readOnly = true)
     public Map<Integer, Instant> getStarredDates(Collection<Integer> artistIds, String username) {
         if (artistIds == null || artistIds.isEmpty() || !StringUtils.hasLength(username)) {
             return Map.of();
         }
-        return starredArtistRepository.findByArtistIdInAndUsername(artistIds, username)
-                .stream()
-                .filter(sa -> sa.getArtist() != null)
-                .collect(Collectors.toMap(sa -> sa.getArtist().getId(), StarredArtist::getCreated, (a, b) -> a));
+        Map<Integer, Instant> result = new HashMap<>();
+        for (List<Integer> batch : Lists.partition(new ArrayList<>(artistIds), IN_CLAUSE_BATCH_SIZE)) {
+            for (StarredArtist sa : starredArtistRepository.findByArtistIdInAndUsername(batch, username)) {
+                if (sa.getArtist() != null) {
+                    result.putIfAbsent(sa.getArtist().getId(), sa.getCreated());
+                }
+            }
+        }
+        return result;
     }
 
     /**
@@ -329,10 +340,17 @@ public class ArtistService {
                 // Propagate the ID back to the original artist object so callers
                 // (e.g., updateArtist → indexManager.index) can use artist.getId()
                 artist.setId(saved.getId());
+                if (saved.getName() != null) {
+                    artistByNameCache.put(saved.getName(), Optional.of(saved));
+                }
                 return saved;
             }
         }
-        return artistRepository.save(artist);
+        Artist saved = artistRepository.save(artist);
+        if (saved != null && saved.getName() != null) {
+            artistByNameCache.put(saved.getName(), Optional.of(saved));
+        }
+        return saved;
     }
 
     /**

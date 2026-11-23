@@ -10,4 +10,4 @@ FILE "airsonic-test.wav" WAVE
   TRACK 02 AUDIO
     TITLE "Track Two"
     PERFORMER "TestExtendedArtist2"
-    INDEX 01 04:01:31
+    INDEX 01 00:01:00

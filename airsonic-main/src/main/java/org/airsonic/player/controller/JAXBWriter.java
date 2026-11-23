@@ -259,10 +259,35 @@ public class JAXBWriter {
         if (value == null || value.isEmpty()) {
             return value;
         }
-        StringBuilder sb = new StringBuilder(value.length());
-        for (int i = 0; i < value.length(); i++) {
+        // Fast path: avoid allocating a StringBuilder copy when the response is already valid.
+        int len = value.length();
+        int firstInvalid = -1;
+        for (int i = 0; i < len; i++) {
             char c = value.charAt(i);
-            if (c >= 0xD800 && c <= 0xDBFF && i + 1 < value.length()) {
+            if (c >= 0xD800 && c <= 0xDBFF) {
+                if (i + 1 < len) {
+                    char low = value.charAt(i + 1);
+                    if (low >= 0xDC00 && low <= 0xDFFF) {
+                        i++;
+                        continue;
+                    }
+                }
+                firstInvalid = i;
+                break;
+            }
+            if (!isValidXmlChar(c)) {
+                firstInvalid = i;
+                break;
+            }
+        }
+        if (firstInvalid < 0) {
+            return value;
+        }
+        StringBuilder sb = new StringBuilder(len);
+        sb.append(value, 0, firstInvalid);
+        for (int i = firstInvalid; i < len; i++) {
+            char c = value.charAt(i);
+            if (c >= 0xD800 && c <= 0xDBFF && i + 1 < len) {
                 char low = value.charAt(i + 1);
                 if (low >= 0xDC00 && low <= 0xDFFF) {
                     // Valid surrogate pair (supplementary character) — keep both.

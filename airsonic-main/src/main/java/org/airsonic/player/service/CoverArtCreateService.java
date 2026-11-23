@@ -21,6 +21,8 @@
 
 package org.airsonic.player.service;
 
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
 import org.airsonic.player.domain.CoverArt;
 import org.airsonic.player.domain.MediaFile;
 import org.airsonic.player.domain.Playlist;
@@ -63,9 +65,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class CoverArtCreateService {
@@ -105,12 +105,20 @@ public class CoverArtCreateService {
     private static final Set<String> IMAGE_EXTENSIONS = Set.of("jpg", "jpeg", "png", "gif", "webp", "bmp");
 
     /**
-     * Cache of embedded artwork extracted from audio files (FLAC/MP3/M4A/…), keyed by
-     * {@code path + lastModified}. Without it, every {@code getCoverArt} request re-parses the whole
-     * audio container to extract the tag image — the dominant cost of cover art serving on libraries
-     * whose cover_art table points at audio files.
+     * Maximum heap budget for cached embedded artwork payloads. Keeps unscaled cover-art serving
+     * fast without risking unbounded heap growth on large libraries with high-resolution embedded art.
      */
-    private final Map<String, CachedArtwork> embeddedArtworkCache = new ConcurrentHashMap<>();
+    static final long MAX_EMBEDDED_ARTWORK_CACHE_BYTES = 64L * 1024 * 1024;
+
+    /**
+     * Bounded weight-based cache of embedded artwork extracted from audio files (FLAC/MP3/M4A/…),
+     * keyed by file path and validated against {@code lastModified}. Without it, every unscaled
+     * {@code getCoverArt} request re-parses the whole audio container to extract the tag image.
+     */
+    private final Cache<String, CachedArtwork> embeddedArtworkCache = CacheBuilder.newBuilder()
+            .maximumWeight(MAX_EMBEDDED_ARTWORK_CACHE_BYTES)
+            .weigher((String key, CachedArtwork value) -> value.data().length + 256)
+            .build();
 
     private record CachedArtwork(Instant lastModified, byte[] data, String mimeType) { }
 
@@ -374,18 +382,16 @@ public class CoverArtCreateService {
     private CachedArtwork getCachedArtwork(Path file) throws Exception {
         Instant lastModified = Files.getLastModifiedTime(file).toInstant();
         String key = file.toString();
-        CachedArtwork cached = embeddedArtworkCache.get(key);
+        CachedArtwork cached = embeddedArtworkCache.getIfPresent(key);
         if (cached != null && cached.lastModified().equals(lastModified)) {
             return cached;
         }
         Artwork artwork = JaudiotaggerParser.getArtwork(file);
-        if (artwork == null) {
+        if (artwork == null || artwork.getBinaryData() == null) {
             throw new IOException("No artwork in " + file);
         }
         byte[] data = artwork.getBinaryData();
         CachedArtwork fresh = new CachedArtwork(lastModified, data, artwork.getMimeType());
-        // Bounded by library size; a ConcurrentHashMap is fine — worst case a few tens of thousands
-        // of small-byte arrays for a very large library.
         embeddedArtworkCache.put(key, fresh);
         return fresh;
     }

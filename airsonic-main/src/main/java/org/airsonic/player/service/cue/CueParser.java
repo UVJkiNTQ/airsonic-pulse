@@ -76,6 +76,7 @@ public class CueParser {
     private FileData currentFileData;
     private TrackData currentTrackData;
     private int lineNumber;
+    private boolean rejected;
 
     // ── public API ──────────────────────────────────────────────────────────
 
@@ -115,6 +116,7 @@ public class CueParser {
         currentFileData = null;
         currentTrackData = null;
         lineNumber = 0;
+        rejected = false;
 
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, charset))) {
             String line;
@@ -130,6 +132,9 @@ public class CueParser {
                         continuation = null;
                         parseLine(merged);
                     }
+                    if (rejected) {
+                        return null;
+                    }
                     continue;
                 }
 
@@ -140,9 +145,15 @@ public class CueParser {
                 }
 
                 parseLine(line);
+                if (rejected) {
+                    return null;
+                }
             }
             if (continuation != null) {
                 parseLine(continuation.toString());
+                if (rejected) {
+                    return null;
+                }
             }
         }
 
@@ -294,6 +305,21 @@ public class CueParser {
         Position position = parsePosition(parts[2]);
         if (position == null) {
             LOG.debug("Invalid position on line {}: {}", lineNumber, parts[2]);
+            return;
+        }
+
+        // Reject EAC noncompliant multi-file CUE sheets where TRACK N precedes FILE "N..."
+        // and INDEX arrives after the FILE switch without a preceding TRACK declaration.
+        // Continuing would misassign tracks across files and produce duration=0 entries.
+        if (currentFileData != null
+                && currentTrackData.getNumber() >= 0
+                && currentTrackData.getParent() != currentFileData
+                && currentTrackData.getIndex(1) == null) {
+            FileData previousFileData = currentTrackData.getParent();
+            LOG.error("Noncompliant multi-file CUE at line {}: INDEX {} appears after FILE '{}' without a TRACK declaration (previous TRACK {} is under FILE '{}')",
+                    lineNumber, indexNumber, currentFileData.getFile(),
+                    currentTrackData.getNumber(), previousFileData != null ? previousFileData.getFile() : "<none>");
+            rejected = true;
             return;
         }
 

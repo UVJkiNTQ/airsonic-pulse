@@ -43,6 +43,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Parses meta data from video files using FFmpeg (http://ffmpeg.org/).
@@ -92,11 +93,17 @@ public class FFmpegParser extends MetaDataParser {
             try (InputStream in = process.getInputStream();
                 BufferedInputStream bin = new BufferedInputStream(in); ) {
                 result = Util.getObjectMapper().readTree(bin);
+                process.waitFor(5, TimeUnit.SECONDS);
             } finally {
                 process.destroy();
             }
 
-            populateFromJson(result, metaData);
+            if (result == null || !result.has("format")) {
+                LOG.warn("ffprobe returned no format metadata for {}", file);
+            }
+            if (result != null) {
+                populateFromJson(result, metaData);
+            }
 
             // Opus base gain lives in the OpusHead header (output_gain), which ffprobe does not
             // expose — read it directly from the container. Opus-only; other formats have no

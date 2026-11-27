@@ -569,4 +569,43 @@ public class CueParserTest {
         assertEquals("test.wav", sheet.getFileData().get(0).getFile());
         assertEquals(1, sheet.getAllTrackData().size());
     }
+
+    @Test
+    void testEacNoncompliantMultiFileCueIsRejected() throws Exception {
+        String cue = """
+            TITLE "Noncompliant Single"
+            FILE "01 First.flac" WAVE
+              TRACK 01 AUDIO
+                TITLE "First"
+                INDEX 01 00:00:00
+              TRACK 02 AUDIO
+                TITLE "Second"
+            FILE "02 Second.flac" WAVE
+                INDEX 01 00:00:00
+              TRACK 03 AUDIO
+                TITLE "Third"
+            FILE "03 Third.flac" WAVE
+                INDEX 01 00:00:00
+            """;
+
+        assertNull(parse(cue), "EAC noncompliant multi-file CUE must be rejected");
+    }
+
+    @Test
+    void testEacNoncompliantMultiFileCueWithPregapIsRejected() throws Exception {
+        String cue = """
+            TITLE "Noncompliant With Pregap"
+            FILE "01 First.flac" WAVE
+              TRACK 01 AUDIO
+                TITLE "First"
+                INDEX 01 00:00:00
+              TRACK 02 AUDIO
+                TITLE "Second"
+                INDEX 00 04:10:00
+            FILE "02 Second.flac" WAVE
+                INDEX 01 00:00:00
+            """;
+
+        assertNull(parse(cue), "EAC noncompliant multi-file CUE with pregap must be rejected");
+    }
 }

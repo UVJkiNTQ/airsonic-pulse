@@ -39,6 +39,7 @@ import org.digitalmediaserver.cuelib.TrackData;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatchers;
 import org.mockito.InjectMocks;
@@ -48,13 +49,17 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -739,5 +744,111 @@ public class MediaFileServiceTest {
         MediaFile folder = albumFolder("Various Artists");
         assertFalse(MediaFileService.refreshAlbumSnapshot(folder, null));
         assertEquals("Various Artists", folder.getArtist());
+    }
+
+    @Test
+    public void processCueSheetEntryDoesNotFallbackWhenSingleFileNameMismatches(@TempDir Path tempDir) throws Exception {
+        Path albumDir = tempDir.resolve("album");
+        Files.createDirectories(albumDir);
+
+        MusicFolder folder = new MusicFolder(1, tempDir, "Music", MusicFolder.Type.MEDIA, true, Instant.now());
+        MediaFile parent = new MediaFile();
+        parent.setPath("album");
+        parent.setFolder(folder);
+        parent.setMediaType(MediaType.DIRECTORY);
+
+        MediaFile flac = new MediaFile();
+        flac.setPath("album/Soundtrack・2.flac");
+        flac.setFolder(folder);
+        flac.setMediaType(MediaType.MUSIC);
+        Map<String, MediaFile> bareFiles = new HashMap<>();
+        bareFiles.put("Soundtrack・2.flac", flac);
+
+        CueSheet cueSheet = new CueSheet();
+        FileData fileData = new FileData(cueSheet, "Soundtrack.2.flac", "WAVE");
+        fileData.getTrackData().add(createTrack(fileData, 1, "Track 1", 0, 0, 0));
+        cueSheet.getFileData().add(fileData);
+
+        Stream<MediaFile> result = ReflectionTestUtils.invokeMethod(
+                mediaFileService,
+                "processCueSheetEntry",
+                Map.entry("album/Soundtrack・2.cue", cueSheet),
+                parent,
+                folder,
+                bareFiles,
+                new HashMap<Pair<String, Double>, MediaFile>(),
+                new HashSet<String>());
+
+        assertTrue(result.toList().isEmpty());
+        assertTrue(bareFiles.containsKey("Soundtrack・2.flac"));
+        verify(mediaFileRepository, never()).save(any());
+    }
+
+    @Test
+    public void processCueSheetEntryIgnoresNonAudioBinFileReference(@TempDir Path tempDir) throws Exception {
+        Path albumDir = tempDir.resolve("album");
+        Files.createDirectories(albumDir);
+        Files.write(albumDir.resolve("Disc.bin"), new byte[] {1, 2, 3, 4});
+
+        MusicFolder folder = new MusicFolder(1, tempDir, "Music", MusicFolder.Type.MEDIA, true, Instant.now());
+        MediaFile parent = new MediaFile();
+        parent.setPath("album");
+        parent.setFolder(folder);
+        parent.setMediaType(MediaType.DIRECTORY);
+
+        CueSheet cueSheet = new CueSheet();
+        FileData fileData = new FileData(cueSheet, "Disc.bin", "BINARY");
+        fileData.getTrackData().add(createTrack(fileData, 1, "Data Track", 0, 0, 0));
+        cueSheet.getFileData().add(fileData);
+
+        when(settingsService.getMusicFileTypesSet()).thenReturn(Set.of("flac", "mp3"));
+        when(settingsService.getVideoFileTypesSet()).thenReturn(Set.of());
+
+        Stream<MediaFile> result = ReflectionTestUtils.invokeMethod(
+                mediaFileService,
+                "processCueSheetEntry",
+                Map.entry("album/Disc.cue", cueSheet),
+                parent,
+                folder,
+                new HashMap<String, MediaFile>(),
+                new HashMap<Pair<String, Double>, MediaFile>(),
+                new HashSet<String>());
+
+        assertTrue(result.toList().isEmpty());
+        verify(mediaFileRepository, never()).save(any());
+    }
+
+    @Test
+    public void needsMetadataRetryTriggersOnlyForNonZeroUnindexedNullDurationAudio() {
+        MediaFile failedFlac = new MediaFile();
+        failedFlac.setMediaType(MediaType.MUSIC);
+        failedFlac.setFileSize(43_805_745L);
+        failedFlac.setDuration(null);
+        assertTrue(MediaFileService.needsMetadataRetry(failedFlac));
+
+        MediaFile zeroByteFlac = new MediaFile();
+        zeroByteFlac.setMediaType(MediaType.MUSIC);
+        zeroByteFlac.setFileSize(0L);
+        zeroByteFlac.setDuration(null);
+        assertFalse(MediaFileService.needsMetadataRetry(zeroByteFlac));
+
+        MediaFile healthyFlac = new MediaFile();
+        healthyFlac.setMediaType(MediaType.MUSIC);
+        healthyFlac.setFileSize(43_805_745L);
+        healthyFlac.setDuration(143.22);
+        assertFalse(MediaFileService.needsMetadataRetry(healthyFlac));
+
+        MediaFile indexedBase = new MediaFile();
+        indexedBase.setMediaType(MediaType.MUSIC);
+        indexedBase.setFileSize(43_805_745L);
+        indexedBase.setDuration(null);
+        indexedBase.setIndexPath("album/disc.cue");
+        assertFalse(MediaFileService.needsMetadataRetry(indexedBase));
+
+        MediaFile directory = new MediaFile();
+        directory.setMediaType(MediaType.DIRECTORY);
+        directory.setFileSize(4096L);
+        directory.setDuration(null);
+        assertFalse(MediaFileService.needsMetadataRetry(directory));
     }
 }

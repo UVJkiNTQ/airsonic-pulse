@@ -271,8 +271,23 @@ public class MediaFileService {
                 && (mediaFile.getVersion() < MediaFile.VERSION
                     || settingsService.getFullScan()
                     || mediaFile.isChanged()
+                    || needsMetadataRetry(mediaFile)
                     || (mediaFile.hasIndex() && mediaFile.getChanged().truncatedTo(ChronoUnit.MICROS).compareTo(FileUtil.lastModified(mediaFile.getFullIndexPath()).truncatedTo(ChronoUnit.MICROS)) < 0)
                 );
+    }
+
+    /**
+     * Returns {@code true} for a non-zero-byte audio file whose previous metadata parse failed to
+     * determine duration (for example, due to a transient remote/rclone I/O error). Retrying on
+     * the next quick scan allows healthy files to self-heal without requiring a full scan, while
+     * skipping 0-byte files, directories, and already-indexed CUE base files.
+     */
+    static boolean needsMetadataRetry(MediaFile mediaFile) {
+        return mediaFile.isAudio()
+                && !mediaFile.hasIndex()
+                && mediaFile.getDuration() == null
+                && mediaFile.getFileSize() != null
+                && mediaFile.getFileSize() > 0;
     }
 
     /**
@@ -1191,15 +1206,17 @@ public class MediaFileService {
                 // Fall back to resolving the FILE block's path relative to the CUE's parent
                 // directory. Many multi-disc albums (disc 1/01 … .flac) reference audio files in
                 // subdirectories, which are never direct children of the parent and therefore
-                // absent from `bareFiles`. getMediaFile resolves DB + disk (and creates the
-                // MediaFile row if needed), so those bases index correctly too. Windows-authored
-                // CUE sheets separate subdirectories with '\' — normalize to '/' first so the
-                // path resolves on POSIX hosts where '\' is a legal filename character.
+                // absent from `bareFiles`. Only resolve regular files accepted by the media-file
+                // filter so non-audio targets (such as CD-ROM `.bin` data tracks) are not
+                // materialized as MUSIC rows.
                 Path baseRelative = resolveCueBasePath(parent.getPath(), filePath, folder.getPath());
                 if (Objects.nonNull(baseRelative)) {
-                    base = getMediaFile(baseRelative, folder);
-                    if (Objects.nonNull(base)) {
-                        bareFiles.remove(FilenameUtils.getName(base.getPath()));
+                    Path baseFull = folder.getPath().resolve(baseRelative);
+                    if (Files.isRegularFile(baseFull) && includeMediaFileByPath(baseFull)) {
+                        base = getMediaFile(baseRelative, folder);
+                        if (Objects.nonNull(base)) {
+                            bareFiles.remove(FilenameUtils.getName(base.getPath()));
+                        }
                     }
                 }
             }
@@ -1224,7 +1241,7 @@ public class MediaFileService {
             } else {
                 // A missing/unresolvable FILE block is skipped without aborting the scan; the
                 // remaining blocks and cue sheets still materialise.
-                LOG.warn("Could not find base file '{}' for cue sheet {}", filePath, indexPath);
+                LOG.error("Could not find base file '{}' for cue sheet {}", filePath, indexPath);
                 return Stream.<MediaFile>empty();
             }
         });

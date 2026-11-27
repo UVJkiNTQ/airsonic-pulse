@@ -49,6 +49,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -58,6 +59,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.LogManager;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -140,6 +142,14 @@ public class JaudiotaggerParser extends MetaDataParser {
         }
     }
 
+    // Fast I/O failures (e.g. transient rate-limit / FUSE hiccup on remote mounts) get one short
+    // retry before falling back to ffprobe. Slow OS I/O failures (>= 10s, such as a permanently
+    // unreadable rclone object timing out with EIO after ~2 minutes) skip both retry and ffprobe
+    // fallback so a single broken file does not stall the scanner twice.
+    static final long TRANSIENT_IO_RETRY_THRESHOLD_MS = 5_000L;
+    static final long SLOW_IO_FAILURE_THRESHOLD_MS = 10_000L;
+    private static final long TRANSIENT_IO_RETRY_DELAY_MS = 500L;
+
     /**
      * Parses meta data for the given music file. No guessing or reformatting is done.
      *
@@ -151,9 +161,10 @@ public class JaudiotaggerParser extends MetaDataParser {
     public MetaData getRawMetaData(Path file) {
 
         MetaData metaData = new MetaData();
+        long startNanos = System.nanoTime();
 
         try {
-            AudioFile audioFile = AudioFileIO.read(file.toFile());
+            AudioFile audioFile = readAudioFileWithIoRetry(file, startNanos);
             Tag tag = audioFile.getTag();
             if (tag != null) {
                 metaData.setAlbumName(getTagField(tag, FieldKey.ALBUM));
@@ -211,6 +222,11 @@ public class JaudiotaggerParser extends MetaDataParser {
 
 
         } catch (Throwable x) {
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+            if (hasIoCause(x) && elapsedMs >= SLOW_IO_FAILURE_THRESHOLD_MS) {
+                LOG.warn("I/O error reading {} after {} ms; skipping ffmpeg fallback", file, elapsedMs, x);
+                return metaData;
+            }
             LOG.warn("Error when parsing tags in {} (falling back to ffmpeg metadata)", file, x);
             // jaudiotagger cannot read every file — e.g. its WavTagReader throws
             // java.nio.BufferUnderflowException on otherwise-valid WAVs that carry no
@@ -222,6 +238,51 @@ public class JaudiotaggerParser extends MetaDataParser {
         }
 
         return metaData;
+    }
+
+    private AudioFile readAudioFileWithIoRetry(Path file, long startNanos) throws Exception {
+        try {
+            return readAudioFile(file);
+        } catch (Exception firstFailure) {
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+            if (!hasIoCause(firstFailure) || elapsedMs >= TRANSIENT_IO_RETRY_THRESHOLD_MS) {
+                throw firstFailure;
+            }
+            LOG.debug("Transient I/O error reading {} ({} ms); retrying once", file, elapsedMs, firstFailure);
+            long delayMs = retryDelayMillis();
+            if (delayMs > 0) {
+                try {
+                    Thread.sleep(delayMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw firstFailure;
+                }
+            }
+            return readAudioFile(file);
+        }
+    }
+
+    /**
+     * Reads the audio file via jaudiotagger. Factored out so unit tests can inject transient
+     * {@link IOException}s without mocking static {@link AudioFileIO#read}.
+     */
+    AudioFile readAudioFile(Path file) throws Exception {
+        return AudioFileIO.read(file.toFile());
+    }
+
+    long retryDelayMillis() {
+        return TRANSIENT_IO_RETRY_DELAY_MS;
+    }
+
+    static boolean hasIoCause(Throwable throwable) {
+        Throwable cursor = throwable;
+        for (int depth = 0; cursor != null && depth < 16; depth++) {
+            if (cursor instanceof IOException) {
+                return true;
+            }
+            cursor = cursor.getCause();
+        }
+        return false;
     }
 
     private static String getTagField(Tag tag, FieldKey fieldKey) {

@@ -17,6 +17,9 @@
 package org.airsonic.player.service.metadata;
 
 import org.airsonic.player.domain.Contributor;
+import org.jaudiotagger.audio.AudioFile;
+import org.jaudiotagger.audio.exceptions.CannotReadException;
+import org.jaudiotagger.audio.generic.GenericAudioHeader;
 import org.jaudiotagger.tag.FieldKey;
 import org.jaudiotagger.tag.id3.ID3v23Frame;
 import org.jaudiotagger.tag.id3.ID3v23Tag;
@@ -32,6 +35,7 @@ import org.jaudiotagger.tag.vorbiscomment.VorbisCommentTag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
@@ -39,8 +43,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -651,5 +657,88 @@ public class JaudiotaggerParserTestCase {
                 "a file jaudiotagger cannot read at all should fall back to ffmpeg");
         assertEquals(10.0, result.getDuration(), 0.001);
         assertEquals(128, result.getBitRate());
+    }
+
+    @Test
+    public void testTransientIoErrorRetriesOnceAndSucceedsWithoutFfmpegFallback() throws Exception {
+        Path dummy = tmp.resolve("transient.flac");
+        Files.write(dummy, new byte[] {1, 2, 3});
+
+        AtomicInteger attempts = new AtomicInteger();
+        AtomicBoolean fallbackCalled = new AtomicBoolean(false);
+        FFmpegParser stub = new FFmpegParser() {
+            @Override
+            public MetaData getRawMetaData(Path file) {
+                fallbackCalled.set(true);
+                return new MetaData();
+            }
+        };
+
+        JaudiotaggerParser parser = new JaudiotaggerParser(null, stub) {
+            @Override
+            AudioFile readAudioFile(Path file) throws Exception {
+                if (attempts.incrementAndGet() == 1) {
+                    throw new CannotReadException("transient mount glitch", new IOException("Input/output error"));
+                }
+                VorbisCommentTag tag = VorbisCommentTag.createNewTag();
+                tag.setField(FieldKey.TITLE, "Tracing Roots");
+                tag.setField(FieldKey.ARTIST, "Budapest Symphony Orchestra");
+                GenericAudioHeader header = new GenericAudioHeader();
+                header.setPreciseLength(143.22);
+                header.setBitRate(2307);
+                return new AudioFile(file.toFile(), header, tag);
+            }
+
+            @Override
+            long retryDelayMillis() {
+                return 0L;
+            }
+        };
+
+        MetaData result = parser.getRawMetaData(dummy);
+
+        assertEquals(2, attempts.get(), "transient IOException should trigger one retry");
+        assertFalse(fallbackCalled.get(), "retry recovery should avoid ffprobe fallback");
+        assertEquals("Tracing Roots", result.getTitle());
+        assertEquals("Budapest Symphony Orchestra", result.getArtist());
+        assertEquals(143.22, result.getDuration(), 0.01);
+        assertEquals(2307, result.getBitRate());
+    }
+
+    @Test
+    public void testNonIoParseErrorDoesNotRetryAndFallsBackToFfmpegImmediately() throws Exception {
+        Path dummy = tmp.resolve("corrupt.flac");
+        Files.write(dummy, new byte[] {1, 2, 3});
+
+        AtomicInteger attempts = new AtomicInteger();
+        AtomicBoolean fallbackCalled = new AtomicBoolean(false);
+        FFmpegParser stub = new FFmpegParser() {
+            @Override
+            public MetaData getRawMetaData(Path file) {
+                fallbackCalled.set(true);
+                MetaData md = new MetaData();
+                md.setDuration(42.0);
+                return md;
+            }
+        };
+
+        JaudiotaggerParser parser = new JaudiotaggerParser(null, stub) {
+            @Override
+            AudioFile readAudioFile(Path file) throws Exception {
+                attempts.incrementAndGet();
+                throw new CannotReadException("bad header");
+            }
+
+            @Override
+            long retryDelayMillis() {
+                return 0L;
+            }
+        };
+
+        MetaData result = parser.getRawMetaData(dummy);
+
+        assertEquals(1, attempts.get(), "non-IO parse error must not retry jaudiotagger");
+        assertTrue(fallbackCalled.get());
+        assertEquals(42.0, result.getDuration(), 0.001);
     }
 }
